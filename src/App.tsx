@@ -3,33 +3,33 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Login } from './components/Login';
 
 // --- IMPORTACIONES DE COMPONENTES EXTERNOS ---
-import { MembersList } from './components/MembersList'; 
-import MembershipForm from './components/MembershipForm'; 
-import Ajustes from './components/Ajustes'; 
+import { MembersList } from './components/MembersList';
+import MembershipForm from './components/MembershipForm';
+import Ajustes from './components/Ajustes';
 import { StatisticsModule } from './components/StatisticsModule';
 import { StaffModule } from './components/StaffModule'; // Importado correctamente
 import { PaymentsModule } from './components/PaymentsModule';
 import { FinancialOperationsModule } from './components/FinancialOperationsModule';
 
-import { 
-  TrendingUp, BarChart3, Menu, X, 
-  Users, Settings, UserPlus, UserCheck, DollarSign, 
-  Wallet 
+import {
+    TrendingUp, BarChart3, Menu, X,
+    Users, Settings, UserPlus, UserCheck, DollarSign,
+    Wallet
 } from 'lucide-react';
 
 // --- CONTEXTO DE TEMA ---
-const ThemeContext = createContext({ theme: 'light', toggleTheme: () => {} });
+const ThemeContext = createContext({ theme: 'light', toggleTheme: () => { } });
 
 const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [theme, setTheme] = useState<'light' | 'dark'>(() => (localStorage.getItem('theme') as any) || 'light');
-    
+
     useEffect(() => {
         document.documentElement.classList.toggle('dark', theme === 'dark');
         localStorage.setItem('theme', theme);
     }, [theme]);
 
     const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
-    
+
     return (
         <ThemeContext.Provider value={{ theme, toggleTheme }}>
             {children}
@@ -44,12 +44,28 @@ function Dashboard() {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [refreshTrigger, setRefreshTrigger] = useState(false);
+    const [bcvRate, setBcvRate] = useState<number | null>(null);
+
+    useEffect(() => {
+        const fetchBCVRate = async () => {
+            try {
+                const response = await fetch('https://ve.dolarapi.com/v1/dolares/oficial');
+                const data = await response.json();
+                if (data && data.promedio) {
+                    setBcvRate(data.promedio);
+                }
+            } catch (err) {
+                console.error("Error obteniendo tasa de DolarAPI:", err);
+            }
+        };
+        fetchBCVRate();
+    }, []);
 
     if (!user) return <Login />;
 
     return (
         <div className="h-screen bg-zinc-950 text-white flex flex-col transition-colors duration-300 overflow-hidden">
-            
+
             {/* Barra de Navegación Superior */}
             <header className="bg-black border-b border-zinc-800 h-16 flex items-center px-6 shrink-0 z-[60] relative">
                 <div className="flex justify-between items-center w-full">
@@ -67,8 +83,14 @@ function Dashboard() {
                         </div>
                     </div>
                     <div className="flex items-center gap-3">
-                        <button onClick={() => signOut()} className="px-4 py-2 bg-red-950/40 text-red-400 border border-red-900/50 rounded-xl font-black text-[10px] tracking-widest hover:bg-red-600 hover:text-white transition-all">
-                            CERRAR SESION
+                        {bcvRate && (
+                            <div className="bg-zinc-900 border border-zinc-800 px-3 py-1.5 rounded-xl flex items-center gap-2 hidden md:flex">
+                                <span className="text-xs font-black text-orange-500 uppercase tracking-widest">Tasa BCV:</span>
+                                <span className="text-sm font-black text-zinc-200">Bs. {bcvRate}</span>
+                            </div>
+                        )}
+                        <button onClick={() => signOut()} className="px-4 py-2 bg-red-950/40 text-red-400 border border-red-900/50 rounded-xl font-black text-xs tracking-widest hover:bg-red-600 hover:text-white transition-all">
+                            CERRAR SESIÓN
                         </button>
                     </div>
                 </div>
@@ -77,14 +99,17 @@ function Dashboard() {
             <main className="flex flex-1 overflow-hidden relative">
                 {/* Menú Lateral */}
                 <aside className={`fixed inset-y-0 left-0 z-50 md:static md:w-64 w-64 bg-black p-4 flex flex-col space-y-1.5 transition-transform duration-300 border-r border-zinc-900 ${isMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
-                    <SidebarItem active={activeTab === 'members'} onClick={() => {setActiveTab('members'); setIsMenuOpen(false);}} icon={<Users size={18}/>} label="Miembros" />
-                    <SidebarItem active={activeTab === 'payments'} onClick={() => {setActiveTab('payments'); setIsMenuOpen(false);}} icon={<DollarSign size={18}/>} label="Pagos" />
-                    <SidebarItem active={activeTab === 'financial'} onClick={() => {setActiveTab('financial'); setIsMenuOpen(false);}} icon={<Wallet size={18}/>} label="Finanzas" />
-                    <SidebarItem active={activeTab === 'statistics'} onClick={() => {setActiveTab('statistics'); setIsMenuOpen(false);}} icon={<BarChart3 size={18}/>} label="Reportes" />
+                    <SidebarItem active={activeTab === 'members'} onClick={() => { setActiveTab('members'); setIsMenuOpen(false); }} icon={<Users size={18} />} label="Registro" />
+                    <SidebarItem active={activeTab === 'payments'} onClick={() => { setActiveTab('payments'); setIsMenuOpen(false); }} icon={<DollarSign size={18} />} label="Miembros y pagos" />
+                    <SidebarItem active={activeTab === 'financial'} onClick={() => { setActiveTab('financial'); setIsMenuOpen(false); }} icon={<Wallet size={18} />} label="Estadisticas" />
+                    <SidebarItem active={activeTab === 'statistics'} onClick={() => { setActiveTab('statistics'); setIsMenuOpen(false); }} icon={<BarChart3 size={18} />} label="Notificaciones" />
                     {/* Botón de Notas ahora abre StaffModule */}
-                    <SidebarItem active={activeTab === 'notes'} onClick={() => {setActiveTab('notes'); setIsMenuOpen(false);}} icon={<UserCheck size={18}/>} label="Personal" />
+                    <SidebarItem active={activeTab === 'notes'} onClick={() => { setActiveTab('notes'); setIsMenuOpen(false); }} icon={<UserCheck size={18} />} label="Entrenadores" />
                     <div className="pt-4 mt-4 border-t border-zinc-900">
-                        <SidebarItem active={activeTab === 'settings'} onClick={() => {setActiveTab('settings'); setIsMenuOpen(false);}} icon={<Settings size={18}/>} label="Ajustes" />
+                        <SidebarItem active={activeTab === 'settings'} onClick={() => { setActiveTab('settings'); setIsMenuOpen(false); }} icon={<Settings size={18} />} label="Membresias" />
+                    </div>
+                    <div className="mt-auto pt-6 pb-2 text-center text-[10px] text-zinc-600 font-medium tracking-wide">
+                        © 2026 Desarrollado por <br/> <span className="text-orange-500 font-bold">Xkroos</span>. <br/> Todos los derechos reservados.
                     </div>
                 </aside>
 
@@ -109,16 +134,13 @@ function Dashboard() {
 
                                 {isModalOpen && (
                                     <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-                                        <div className="relative w-full max-w-2xl bg-zinc-900 text-white rounded-[2.5rem] shadow-2xl border border-zinc-800 animate-in zoom-in-95 duration-300">
-                                            <button onClick={() => setIsModalOpen(false)} className="absolute top-6 right-6 p-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl text-zinc-400 hover:text-red-500 transition-all z-10">
-                                                <X size={20}/>
-                                            </button>
-                                            <MembershipForm 
-                                                onClose={() => setIsModalOpen(false)} 
+                                        <div className="animate-in zoom-in-95 duration-300 w-full max-w-2xl">
+                                            <MembershipForm
+                                                onClose={() => setIsModalOpen(false)}
                                                 onSuccess={() => {
-                                                    setIsModalOpen(false); 
+                                                    setIsModalOpen(false);
                                                     setRefreshTrigger(!refreshTrigger);
-                                                }} 
+                                                }}
                                             />
                                         </div>
                                     </div>
@@ -127,9 +149,9 @@ function Dashboard() {
                         ) : (
                             <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-4">
                                 {activeTab === 'payments' && <PaymentsModule />}
-                                {activeTab === 'financial' && <FinancialOperationsModule />} 
-                                {activeTab === 'statistics' && <StatisticsModule />} 
-                                {activeTab === 'settings' && <Ajustes />} 
+                                {activeTab === 'financial' && <FinancialOperationsModule />}
+                                {activeTab === 'statistics' && <StatisticsModule />}
+                                {activeTab === 'settings' && <Ajustes />}
                                 {activeTab === 'notes' && <StaffModule />} {/* Cambiado de NotesModule a StaffModule */}
                             </div>
                         )}
@@ -142,13 +164,12 @@ function Dashboard() {
 
 function SidebarItem({ active, onClick, icon, label }: any) {
     return (
-        <button 
-            onClick={onClick} 
-            className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-black text-[10px] uppercase tracking-[0.2em] ${
-                active 
-                ? 'bg-orange-600 text-white shadow-lg shadow-orange-900/40 translate-x-1 border-b-2 border-orange-700' 
+        <button
+            onClick={onClick}
+            className={`w-full flex items-center gap-3 p-3.5 rounded-2xl transition-all font-black text-[10px] uppercase tracking-[0.2em] ${active
+                ? 'bg-orange-600 text-white shadow-lg shadow-orange-900/40 translate-x-1 border-b-2 border-orange-700'
                 : 'text-zinc-400 hover:bg-zinc-900 hover:text-white hover:translate-x-1'
-            }`}
+                }`}
         >
             {icon} {label}
         </button>

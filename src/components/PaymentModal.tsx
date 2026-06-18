@@ -45,19 +45,11 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
     const fetchBCVRate = async () => {
         setLoadingRate(true);
         try {
-            const response = await fetch('https://ve.dolarapi.com/v1/dolares');
+            const response = await fetch('https://ve.dolarapi.com/v1/dolares/oficial');
             const data = await response.json();
             
-            // Filtramos la data para obtener el promedio del BCV (Oficial)
-            const bcvData = data.find((item: any) => 
-                item.fuente === 'bcv' || item.nombre === 'Oficial'
-            );
-
-            if (bcvData && bcvData.promedio) {
-                setBcvRate(bcvData.promedio);
-            } else {
-                // Fallback en caso de que la estructura cambie ligeramente
-                setBcvRate(data[0].promedio);
+            if (data && data.promedio) {
+                setBcvRate(data.promedio);
             }
         } catch (err) {
             console.error("Error obteniendo tasa de DolarAPI:", err);
@@ -87,12 +79,17 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
         e.preventDefault();
         const floatAmount = parseFloat(amount);
         if (!user || isNaN(floatAmount) || floatAmount <= 0) return;
+        
+        if (!window.confirm(`¿Estás seguro que deseas registrar un pago por la cantidad de $${floatAmount}?`)) return;
+
         setLoading(true);
         try {
             const { error } = await supabase.from('payments').insert([{
                 membership_id: id,
                 user_id: user.id,
                 amount: floatAmount,
+                amount_bs: amountInBs,
+                bcv_rate: bcvRate,
                 payment_method: method,
                 reference_number: reference,
                 payment_image_url: imageData,
@@ -146,9 +143,9 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
                                         {/* MONTO EN DIVISAS Y TASA BCV */}
                                         <div className="space-y-1.5">
                                             <div className="flex justify-between items-center px-1">
-                                                <label className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Monto en Divisas</label>
-                                                <div className="flex items-center gap-1.5 bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-900/30">
-                                                    <span className="text-[8px] font-black text-emerald-400 uppercase">BCV: {bcvRate.toFixed(2)} Bs.</span>
+                                                <label className="text-xs font-black text-zinc-300 uppercase tracking-widest">Monto en Divisas</label>
+                                                <div className="flex items-center gap-1.5 bg-emerald-950/40 px-3 py-1 rounded-full border border-emerald-900/30">
+                                                    <span className="text-xs font-black text-emerald-400 uppercase">BCV: {bcvRate.toFixed(2)} Bs.</span>
                                                     <button type="button" onClick={fetchBCVRate} className="text-emerald-400 hover:rotate-180 transition-all">
                                                         <RefreshCw size={8} className={loadingRate ? 'animate-spin' : ''} />
                                                     </button>
@@ -165,10 +162,10 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
 
                                             {/* VISUALIZACIÓN EN TIEMPO REAL BOLÍVARES */}
                                             {amountInBs > 0 && (
-                                                <div className="px-4 py-2 bg-zinc-950 rounded-xl border border-zinc-800/60 animate-in slide-in-from-top-1">
-                                                    <p className="text-[10px] font-black text-orange-500 flex justify-between">
-                                                        <span className="text-zinc-400">Monto en Bolívares:</span>
-                                                        <span>{amountInBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs.</span>
+                                                <div className="px-4 py-3 bg-zinc-950 rounded-xl border border-zinc-800/60 animate-in slide-in-from-top-1">
+                                                    <p className="text-xs font-black text-orange-500 flex justify-between">
+                                                        <span className="text-zinc-300">Monto en Bolívares:</span>
+                                                        <span className="text-sm">{amountInBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs.</span>
                                                     </p>
                                                 </div>
                                             )}
@@ -176,9 +173,9 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
 
                                         {/* MÉTODO DE PAGO */}
                                         <div className="relative">
-                                            <CreditCard className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                                            <CreditCard className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400" size={16} />
                                             <select 
-                                                className="w-full pl-10 pr-4 py-3 bg-black border border-zinc-800 rounded-xl font-bold text-xs text-zinc-300 appearance-none outline-none focus:ring-4 focus:ring-orange-500/5 focus:border-orange-500 transition-all"
+                                                className="w-full pl-10 pr-4 py-3 bg-black border border-zinc-800 rounded-xl font-bold text-sm text-zinc-300 appearance-none outline-none focus:ring-4 focus:ring-orange-500/5 focus:border-orange-500 transition-all"
                                                 value={method} onChange={(e) => setMethod(e.target.value)}
                                             >
                                                 <option value="Efectivo">Efectivo</option>
@@ -190,10 +187,10 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
 
                                         {/* REFERENCIA */}
                                         <div className="relative">
-                                            <Hash className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                                            <Hash className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400" size={16} />
                                             <input 
                                                 type="text" placeholder="Nro de Referencia"
-                                                className="w-full pl-10 pr-4 py-3 bg-black border border-zinc-800 rounded-xl font-bold text-xs text-white outline-none focus:ring-4 focus:ring-orange-500/5 focus:border-orange-500 transition-all"
+                                                className="w-full pl-10 pr-4 py-3 bg-black border border-zinc-800 rounded-xl font-bold text-sm text-white outline-none focus:ring-4 focus:ring-orange-500/5 focus:border-orange-500 transition-all"
                                                 value={reference} onChange={(e) => setReference(e.target.value)}
                                             />
                                         </div>
@@ -202,7 +199,7 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
 
                                 {/* COMPROBANTE DE PAGO */}
                                 <div className="space-y-2">
-                                    <label className="text-[9px] font-black text-zinc-500 uppercase tracking-widest ml-1">Comprobante de Pago</label>
+                                    <label className="text-xs font-black text-zinc-300 uppercase tracking-widest ml-1">Comprobante de Pago</label>
                                     <div className="bg-black rounded-2xl border-2 border-dashed border-zinc-800 p-2 min-h-[160px] flex items-center justify-center">
                                         <ImageUpload onImageSelected={setImageData} disabled={loading} />
                                     </div>

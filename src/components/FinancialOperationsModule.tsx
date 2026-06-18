@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { DollarSign, TrendingUp, Zap, Clock, Loader2, Download } from 'lucide-react';
+import { DollarSign, TrendingUp, Zap, Clock, Loader2, Download, Filter, Search, Plus, X } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -20,15 +20,20 @@ export function FinancialOperationsModule() {
     const { user } = useAuth();
     const [memberships, setMemberships] = useState<MembershipWithPayments[]>([]);
     const [transactions, setTransactions] = useState<any[]>([]);
-    const [investedAmount, setInvestedAmount] = useState(0);
-    const [withdrawn, setWithdrawn] = useState(0);
     const [loading, setLoading] = useState(true);
 
-    // Estados para formularios rápidos
-    const [tempWithdrawn, setTempWithdrawn] = useState('');
-    const [tempInvestedAmount, setTempInvestedAmount] = useState('');
-    const [investDescription, setInvestDescription] = useState('');
-    const [withdrawDescription, setWithdrawDescription] = useState('');
+    // Estados de filtrado
+    const [filterPeriod, setFilterPeriod] = useState<'Todos' | 'Diario' | 'Semanal' | 'Mensual' | 'Anual' | 'Personalizado' | 'Mes Actual'>('Mes Actual');
+    const [customStartDate, setCustomStartDate] = useState('');
+    const [customEndDate, setCustomEndDate] = useState('');
+    const [filterMethod, setFilterMethod] = useState('Todos');
+    const [filterMember, setFilterMember] = useState('');
+    
+    // Estados para Modal de Operación
+    const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
+    const [transactionType, setTransactionType] = useState<'ingreso' | 'inversion' | 'retiro'>('ingreso');
+    const [transactionAmount, setTransactionAmount] = useState('');
+    const [transactionDesc, setTransactionDesc] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
 
     const loadFinancialData = useCallback(async () => {
@@ -72,15 +77,6 @@ export function FinancialOperationsModule() {
             // 3. Procesar Transacciones (Gastos y Retiros)
             if (transRes.data) {
                 setTransactions(transRes.data);
-                let totalInv = 0;
-                let totalWith = 0;
-                transRes.data.forEach(t => {
-                    const amt = Number(t.amount) || 0;
-                    if (t.type === 'inversion') totalInv += amt;
-                    if (t.type === 'retiro') totalWith += amt;
-                });
-                setInvestedAmount(totalInv);
-                setWithdrawn(totalWith);
             }
 
         } catch (err) {
@@ -94,77 +90,112 @@ export function FinancialOperationsModule() {
         loadFinancialData();
     }, [loadFinancialData]);
 
-    // Cálculos de estadísticas dinámicas
-    const stats = useMemo(() => {
-        return memberships.reduce((acc, mem) => {
-            const paid = mem.payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-            const salePrice = Number(mem.price) || 0;
-            const balance = salePrice - paid;
-
-            return {
-                totalPaid: acc.totalPaid + paid,
-                totalPending: acc.totalPending + (balance > 0 ? balance : 0),
-            };
-        }, { totalPaid: 0, totalPending: 0 });
+    // Unificar todos los pagos para facilitar el filtrado
+    const allPayments = useMemo(() => {
+        const flat: any[] = [];
+        memberships.forEach(m => {
+            m.payments.forEach(p => {
+                flat.push({ ...p, customer_name: m.customer_name });
+            });
+        });
+        return flat;
     }, [memberships]);
 
-    // FLUJO DE CAJA: Dinero real recibido - Gastos - Retiros
-    const netCashFlow = stats.totalPaid - investedAmount - withdrawn;
+    const getStartDateForPeriod = (period: string) => {
+        const now = new Date();
+        switch (period) {
+            case 'Diario': now.setHours(0,0,0,0); return now;
+            case 'Semanal': now.setDate(now.getDate() - 7); return now;
+            case 'Mensual': now.setMonth(now.getMonth() - 1); return now;
+            case 'Anual': now.setFullYear(now.getFullYear() - 1); return now;
+            case 'Mes Actual': 
+                const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+                return firstDay;
+            default: return new Date(0);
+        }
+    };
 
-    // --- GENERACIÓN DE PDF CON FILTRADO DE LOGICA TEMPORAL ---
-    const generatePDF = (period: 'Diario' | 'Semanal' | 'Mensual' | 'Anual') => {
+    // Aplicar Filtros a Pagos
+    const filteredPayments = useMemo(() => {
+        let filtered = allPayments;
+
+        if (filterPeriod !== 'Todos') {
+            let start = new Date(0);
+            let end = new Date();
+            
+            if (filterPeriod === 'Personalizado') {
+                start = customStartDate ? new Date(customStartDate + 'T00:00:00') : new Date(0);
+                end = customEndDate ? new Date(customEndDate + 'T23:59:59') : new Date();
+            } else {
+                start = getStartDateForPeriod(filterPeriod);
+            }
+
+            filtered = filtered.filter(p => {
+                const pDate = new Date(p.created_at || p.payment_date);
+                return pDate >= start && pDate <= end;
+            });
+        }
+
+        if (filterMethod !== 'Todos') {
+            filtered = filtered.filter(p => p.payment_method?.toLowerCase() === filterMethod.toLowerCase());
+        }
+
+        if (filterMember.trim() !== '') {
+            filtered = filtered.filter(p => p.customer_name?.toLowerCase().includes(filterMember.toLowerCase()));
+        }
+
+        return filtered;
+    }, [allPayments, filterPeriod, customStartDate, customEndDate, filterMethod, filterMember]);
+
+    // Aplicar Filtros a Transacciones
+    const filteredTransactions = useMemo(() => {
+        let filtered = transactions;
+        if (filterPeriod !== 'Todos') {
+            let start = new Date(0);
+            let end = new Date();
+            if (filterPeriod === 'Personalizado') {
+                start = customStartDate ? new Date(customStartDate + 'T00:00:00') : new Date(0);
+                end = customEndDate ? new Date(customEndDate + 'T23:59:59') : new Date();
+            } else {
+                start = getStartDateForPeriod(filterPeriod);
+            }
+
+            filtered = filtered.filter(t => {
+                const tDate = new Date(t.transaction_date);
+                return tDate >= start && tDate <= end;
+            });
+        }
+        return filtered;
+    }, [transactions, filterPeriod, customStartDate, customEndDate]);
+
+    // Cálculos de estadísticas filtradas
+    const periodPaid = useMemo(() => filteredPayments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0), [filteredPayments]);
+    const periodPaidBs = useMemo(() => filteredPayments.reduce((acc, p) => acc + (Number(p.amount_bs) || 0), 0), [filteredPayments]);
+    const periodInvested = useMemo(() => filteredTransactions.filter(t => t.type === 'inversion').reduce((acc, t) => acc + (Number(t.amount) || 0), 0), [filteredTransactions]);
+    const periodWithdrawn = useMemo(() => filteredTransactions.filter(t => t.type === 'retiro').reduce((acc, t) => acc + (Number(t.amount) || 0), 0), [filteredTransactions]);
+    const periodIngresoManual = useMemo(() => filteredTransactions.filter(t => t.type === 'ingreso').reduce((acc, t) => acc + (Number(t.amount) || 0), 0), [filteredTransactions]);
+    const periodNetCashFlow = periodPaid + periodIngresoManual - periodInvested - periodWithdrawn;
+
+    // Cuentas por cobrar globales (se ven afectadas por el filtro de miembro)
+    const stats = useMemo(() => {
+        return memberships
+            .filter(mem => filterMember.trim() === '' || mem.customer_name?.toLowerCase().includes(filterMember.toLowerCase()))
+            .reduce((acc, mem) => {
+                const paid = mem.payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+                const salePrice = Number(mem.price) || 0;
+                const balance = salePrice - paid;
+                return {
+                    totalPending: acc.totalPending + (balance > 0 ? balance : 0),
+                };
+            }, { totalPending: 0 });
+    }, [memberships, filterMember]);
+
+    // --- GENERACIÓN DE PDF CON FILTRADO ACTUAL ---
+    const generatePDF = () => {
         const doc = new jsPDF();
         const now = new Date();
         const dateStr = now.toLocaleDateString();
-
-        // Determinar fecha límite según el período solicitado
-        let targetDate = new Date();
-        if (period === 'Diario') {
-            targetDate.setHours(0, 0, 0, 0); // Desde el inicio del día de hoy
-        } else if (period === 'Semanal') {
-            targetDate.setDate(now.getDate() - 7); // Últimos 7 días
-        } else if (period === 'Mensual') {
-            targetDate.setMonth(now.getMonth() - 1); // Último mes
-        } else if (period === 'Anual') {
-            targetDate.setFullYear(now.getFullYear() - 1); // Último año
-        }
-
-        // 1. Filtrar transacciones del período seleccionado
-        const filteredTransactions = transactions.filter(t => {
-            const tDate = new Date(t.transaction_date);
-            return tDate >= targetDate;
-        });
-
-        // 2. Calcular métricas exclusivas del período seleccionado
-        let periodInvested = 0;
-        let periodWithdrawn = 0;
-        filteredTransactions.forEach(t => {
-            const amt = Number(t.amount) || 0;
-            if (t.type === 'inversion') periodInvested += amt;
-            if (t.type === 'retiro') periodWithdrawn += amt;
-        });
-
-        // 3. Calcular ingresos cobrados y por cobrar dentro del período seleccionado
-        let periodPaid = 0;
-        let periodPending = 0;
-
-        memberships.forEach(mem => {
-            const paidInPeriod = mem.payments
-                .filter(p => new Date(p.created_at || p.payment_date || now) >= targetDate)
-                .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-            
-            periodPaid += paidInPeriod;
-
-            // Al estar declarada en la interfaz, el compilador procesará 'created_at' sin errores
-            const memDate = new Date(mem.created_at || now); 
-            if (memDate >= targetDate) {
-                const totalMemPaid = mem.payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-                const balance = Number(mem.price) - totalMemPaid;
-                if (balance > 0) periodPending += balance;
-            }
-        });
-
-        const periodNetCashFlow = periodPaid - periodInvested - periodWithdrawn;
+        const titlePeriod = filterPeriod === 'Personalizado' ? `${customStartDate} al ${customEndDate}` : filterPeriod.toUpperCase();
 
         // Título y Estilo del Reporte
         doc.setFontSize(20);
@@ -173,17 +204,19 @@ export function FinancialOperationsModule() {
         
         doc.setFontSize(12);
         doc.setTextColor(30, 30, 36);
-        doc.text(`REPORTE FINANCIERO ${period.toUpperCase()}`, 14, 30);
+        doc.text(`REPORTE FINANCIERO: ${titlePeriod}`, 14, 30);
         doc.setFontSize(10);
         doc.text(`Fecha de emisión: ${dateStr}`, 14, 37);
 
         // Tabla 1: Resumen General del Período
         autoTable(doc, {
             startY: 45,
-            head: [[`Indicador (${period})`, 'Monto (USD)']],
+            head: [[`Indicador`, 'Monto']],
             body: [
-                ['Ingresos en Período (Cobrados)', `$${periodPaid.toLocaleString()}`],
-                ['Cuentas por Cobrar del Período', `$${periodPending.toLocaleString()}`],
+                ['Ingresos en Período (Cobrados USD)', `$${periodPaid.toLocaleString()}`],
+                ['Ingresos en Período (Cobrados Bs)', `Bs. ${periodPaidBs.toLocaleString()}`],
+                ['Ingresos Manuales (Capital)', `$${periodIngresoManual.toLocaleString()}`],
+                ['Cuentas por Cobrar (Global)', `$${stats.totalPending.toLocaleString()}`],
                 ['Inversiones en Período', `$${periodInvested.toLocaleString()}`],
                 ['Gastos/Retiros en Período', `$${periodWithdrawn.toLocaleString()}`],
                 ['SALDO NETO EN PERÍODO', `$${periodNetCashFlow.toLocaleString()}`],
@@ -196,8 +229,8 @@ export function FinancialOperationsModule() {
 
         // Tabla 2: Detalle de Movimientos del Período
         doc.setFontSize(12);
-        const currentY = (doc as any).lastAutoTable.finalY + 15;
-        doc.text(`MOVIMIENTOS DEL PERÍODO (${filteredTransactions.length})`, 14, currentY);
+        let currentY = (doc as any).lastAutoTable.finalY + 15;
+        doc.text(`MOVIMIENTOS MANUALES (${filteredTransactions.length})`, 14, currentY);
 
         const detailRows = filteredTransactions.map(t => [
             new Date(t.transaction_date).toLocaleDateString(),
@@ -216,33 +249,68 @@ export function FinancialOperationsModule() {
             columnStyles: { 3: { halign: 'right' } }
         });
 
-        doc.save(`Reporte_${period}_Energym_${dateStr}.pdf`);
+        // Tabla 3: Detalle de Ingresos (Pagos de Miembros)
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+        doc.text(`DETALLE DE INGRESOS - PAGOS DE MIEMBROS (${filteredPayments.length})`, 14, currentY);
+
+        const paymentRows = filteredPayments.map(p => [
+            new Date(p.created_at || p.payment_date).toLocaleDateString(),
+            p.customer_name || 'Desconocido',
+            p.payment_method || 'N/A',
+            `$${Number(p.amount || 0).toLocaleString()}`,
+            `Bs. ${Number(p.amount_bs || 0).toLocaleString()}`
+        ]);
+
+        paymentRows.push([
+            'TOTALES',
+            '',
+            '',
+            `$${periodPaid.toLocaleString()}`,
+            `Bs. ${periodPaidBs.toLocaleString()}`
+        ]);
+
+        autoTable(doc, {
+            startY: currentY + 5,
+            head: [['Fecha', 'Cliente (Origen)', 'Método', 'Monto (USD)', 'Monto (Bs)']],
+            body: paymentRows,
+            theme: 'striped',
+            headStyles: { fillColor: [16, 185, 129] }, 
+            styles: { fontSize: 8 },
+            columnStyles: { 3: { halign: 'right' }, 4: { halign: 'right' } },
+            didParseCell: function(data) {
+                if (data.row.index === paymentRows.length - 1) {
+                    data.cell.styles.fontStyle = 'bold';
+                    data.cell.styles.textColor = [16, 185, 129];
+                }
+            }
+        });
+
+        doc.save(`Reporte_Financiero_Energym_${dateStr}.pdf`);
     };
 
-    const handleTransaction = async (type: 'inversion' | 'retiro') => {
+    const handleTransaction = async (e: React.FormEvent) => {
+        e.preventDefault();
         if (!user || isProcessing) return;
-        const amount = parseFloat(type === 'inversion' ? tempInvestedAmount : tempWithdrawn);
-        const desc = type === 'inversion' ? investDescription : withdrawDescription;
+        const amount = parseFloat(transactionAmount);
 
-        if (isNaN(amount) || amount <= 0 || !desc.trim()) return;
+        if (isNaN(amount) || amount <= 0 || !transactionDesc.trim()) return;
+
+        const actionText = transactionType === 'ingreso' ? 'ingresar' : transactionType === 'inversion' ? 'invertir' : 'retirar/gastar';
+        if (!window.confirm(`¿Estás seguro que deseas ${actionText} la cantidad de $${amount}?`)) return;
 
         setIsProcessing(true);
         try {
             await supabase.from('financial_transactions').insert({
                 user_id: user.id,
                 amount,
-                type,
-                description: desc.trim(),
+                type: transactionType,
+                description: transactionDesc.trim(),
                 transaction_date: new Date().toISOString()
             });
 
-            if (type === 'inversion') {
-                setTempInvestedAmount('');
-                setInvestDescription('');
-            } else {
-                setTempWithdrawn('');
-                setWithdrawDescription('');
-            }
+            setTransactionAmount('');
+            setTransactionDesc('');
+            setIsTransactionModalOpen(false);
             
             await loadFinancialData();
         } catch (error) {
@@ -254,9 +322,10 @@ export function FinancialOperationsModule() {
 
     // Ajuste de colores para la gráfica de Energym
     const chartData = [
-        { label: 'Caja Real', value: netCashFlow > 0 ? netCashFlow : 0, color: '#10b981' }, 
-        { label: 'Inversión', value: investedAmount, color: '#f97316' },                  
-        { label: 'Retiros', value: withdrawn, color: '#ef4444' },                         
+        { label: 'Caja Real', value: periodNetCashFlow > 0 ? periodNetCashFlow : 0, color: '#10b981' }, 
+        { label: 'Ingreso Manual', value: periodIngresoManual, color: '#3b82f6' },
+        { label: 'Inversión', value: periodInvested, color: '#f97316' },                  
+        { label: 'Retiros', value: periodWithdrawn, color: '#ef4444' },                         
         { label: 'Por Cobrar', value: stats.totalPending, color: '#a1a1aa' }              
     ].filter(d => d.value > 0);
 
@@ -272,37 +341,88 @@ export function FinancialOperationsModule() {
     return (
         <div className="p-4 space-y-6 max-w-7xl mx-auto animate-in fade-in duration-500 text-white">
             
-            {/* CABECERA DE REPORTES */}
+            {/* CABECERA Y FILTROS */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-zinc-900 p-6 rounded-[2.5rem] border border-zinc-800 shadow-2xl">
                 <div>
                     <h2 className="text-xl font-black text-white uppercase tracking-tighter italic">Panel Financiero</h2>
-                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Exporta tus estados de cuenta en PDF</p>
+                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Gestión y Filtros Avanzados</p>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                    <button onClick={() => generatePDF('Diario')} className="flex items-center gap-2 px-4 py-2 bg-zinc-800 text-zinc-300 rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-zinc-700 transition-all border border-zinc-700/50">
-                        <Download size={14} /> Diario
+                <div className="flex flex-wrap gap-3 w-full md:w-auto">
+                    <button onClick={() => setIsTransactionModalOpen(true)} className="flex-1 md:flex-none flex justify-center items-center gap-2 px-6 py-3 bg-emerald-600 text-white rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-700 shadow-lg shadow-emerald-600/20 transition-all border-b-2 border-emerald-800">
+                        <Plus size={16} /> Nueva Operación
                     </button>
-                    <button onClick={() => generatePDF('Semanal')} className="flex items-center gap-2 px-4 py-2 bg-zinc-800 text-zinc-300 rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-zinc-700 transition-all border border-zinc-700/50">
-                        <Download size={14} /> Semanal
-                    </button>
-                    <button onClick={() => generatePDF('Mensual')} className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-orange-700 shadow-lg shadow-orange-600/20 transition-all border-b-2 border-orange-700">
-                        <Download size={14} /> Mensual
-                    </button>
-                    <button onClick={() => generatePDF('Anual')} className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-zinc-950 transition-all border border-zinc-800">
-                        <Download size={14} /> Anual
+                    <button onClick={generatePDF} className="flex-1 md:flex-none flex justify-center items-center gap-2 px-6 py-3 bg-orange-600 text-white rounded-xl text-xs font-black uppercase tracking-wider hover:bg-orange-700 shadow-lg shadow-orange-600/20 transition-all border-b-2 border-orange-800">
+                        <Download size={16} /> Exportar PDF
                     </button>
                 </div>
             </div>
 
+            {/* SECCIÓN DE FILTROS */}
+            <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-[2.5rem] shadow-xl">
+                <div className="flex items-center gap-2 mb-5">
+                    <Filter className="w-4 h-4 text-orange-500" />
+                    <h3 className="font-black text-zinc-300 text-xs uppercase tracking-widest">Filtros Activos</h3>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {/* Período */}
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Período</label>
+                        <select value={filterPeriod} onChange={(e) => setFilterPeriod(e.target.value as any)} className="w-full p-3.5 bg-black border border-zinc-800 rounded-xl text-sm font-bold text-white outline-none focus:border-orange-500 transition-colors">
+                            <option value="Todos">Todos (Histórico)</option>
+                            <option value="Diario">Hoy</option>
+                            <option value="Semanal">Últimos 7 días</option>
+                            <option value="Mes Actual">Mes Actual</option>
+                            <option value="Mensual">Últimos 30 días</option>
+                            <option value="Anual">Último Año</option>
+                            <option value="Personalizado">Rango Personalizado</option>
+                        </select>
+                    </div>
+
+                    {filterPeriod === 'Personalizado' && (
+                        <div className="space-y-1.5 lg:col-span-2 flex gap-3 animate-in fade-in slide-in-from-left-2">
+                            <div className="flex-1">
+                                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Desde</label>
+                                <input type="date" value={customStartDate} onChange={e => setCustomStartDate(e.target.value)} className="w-full p-3.5 bg-black border border-zinc-800 rounded-xl text-sm font-bold text-white outline-none focus:border-orange-500 transition-colors" />
+                            </div>
+                            <div className="flex-1">
+                                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Hasta</label>
+                                <input type="date" value={customEndDate} onChange={e => setCustomEndDate(e.target.value)} className="w-full p-3.5 bg-black border border-zinc-800 rounded-xl text-sm font-bold text-white outline-none focus:border-orange-500 transition-colors" />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Método de Pago */}
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Método de Pago</label>
+                        <select value={filterMethod} onChange={(e) => setFilterMethod(e.target.value)} className="w-full p-3.5 bg-black border border-zinc-800 rounded-xl text-sm font-bold text-white outline-none focus:border-orange-500 transition-colors">
+                            <option value="Todos">Todos</option>
+                            <option value="Efectivo">Efectivo</option>
+                            <option value="Divisas">Divisas</option>
+                            <option value="Pago movil">Pago Móvil</option>
+                            <option value="Zelle">Zelle</option>
+                        </select>
+                    </div>
+
+                    {/* Miembro */}
+                    <div className="space-y-1.5">
+                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Buscar Miembro / Origen</label>
+                        <div className="relative">
+                            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500 w-4 h-4" />
+                            <input type="text" placeholder="Escriba un nombre..." value={filterMember} onChange={e => setFilterMember(e.target.value)} className="w-full pl-10 pr-4 py-3.5 bg-black border border-zinc-800 rounded-xl text-sm font-bold text-white outline-none focus:border-orange-500 transition-colors" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             {/* EFECTIVO NETO */}
-            <div className={`bg-zinc-900 border-l-8 rounded-[2.5rem] p-8 shadow-2xl border border-zinc-800 ${netCashFlow >= 0 ? 'border-l-emerald-500' : 'border-l-red-500'}`}>
+            <div className={`bg-zinc-900 border-l-8 rounded-[2.5rem] p-8 shadow-2xl border border-zinc-800 ${periodNetCashFlow >= 0 ? 'border-l-emerald-500' : 'border-l-red-500'}`}>
                 <div className="flex items-center gap-4">
-                    <div className={`p-4 rounded-2xl ${netCashFlow >= 0 ? 'bg-emerald-950/40 text-emerald-400' : 'bg-red-950/40 text-red-400'}`}>
+                    <div className={`p-4 rounded-2xl ${periodNetCashFlow >= 0 ? 'bg-emerald-950/40 text-emerald-400' : 'bg-red-950/40 text-red-400'}`}>
                         <Zap className="w-8 h-8" />
                     </div>
                     <div>
                         <p className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.2em]">Efectivo Real en Caja</p>
-                        <p className="text-4xl font-black tracking-tighter italic text-white">${netCashFlow.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                        <p className="text-4xl font-black tracking-tighter italic text-white">${periodNetCashFlow.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
                     </div>
                 </div>
             </div>
@@ -313,28 +433,31 @@ export function FinancialOperationsModule() {
                         <DollarSign className="w-4 h-4 text-emerald-500" /> 
                         <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wider">Ingresos (Pagos)</span>
                     </div>
-                    <p className="text-2xl font-black tracking-tight text-white">${stats.totalPaid.toLocaleString()}</p>
+                    <p className="text-2xl font-black tracking-tight text-white">${periodPaid.toLocaleString()}</p>
+                </div>
+                
+                <div className="bg-zinc-900 p-5 rounded-3xl border border-zinc-800 border-b-4 border-b-indigo-500 shadow-xl">
+                    <div className="flex items-center gap-2 mb-1">
+                        <Zap className="w-4 h-4 text-indigo-500" /> 
+                        <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wider">Inversiones</span>
+                    </div>
+                    <p className="text-2xl font-black tracking-tight text-white">${periodInvested.toLocaleString()}</p>
+                </div>
+
+                <div className="bg-zinc-900 p-5 rounded-3xl border border-zinc-800 border-b-4 border-b-red-500 shadow-xl">
+                    <div className="flex items-center gap-2 mb-1">
+                        <TrendingUp className="w-4 h-4 text-red-500" /> 
+                        <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wider">Gastos / Retiros</span>
+                    </div>
+                    <p className="text-2xl font-black tracking-tight text-white">${periodWithdrawn.toLocaleString()}</p>
                 </div>
                 
                 <div className="bg-zinc-900 p-5 rounded-3xl border border-zinc-800 border-b-4 border-b-orange-500 shadow-xl">
                     <div className="flex items-center gap-2 mb-1">
-                        <TrendingUp className="w-4 h-4 text-orange-500" /> 
-                        <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wider">Cuentas por Cobrar</span>
+                        <Clock className="w-4 h-4 text-orange-500" /> 
+                        <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wider">Por Cobrar (Global)</span>
                     </div>
                     <p className="text-2xl font-black tracking-tight text-white">${stats.totalPending.toLocaleString()}</p>
-                </div>
-
-                {/* FORMULARIOS RÁPIDOS */}
-                <div className="bg-zinc-950 p-4 rounded-3xl border border-zinc-800 space-y-2 shadow-inner">
-                    <input type="number" value={tempInvestedAmount} onChange={e => setTempInvestedAmount(e.target.value)} placeholder="Monto Inversión" className="w-full text-xs p-2.5 bg-zinc-900 text-white border border-zinc-800 rounded-xl outline-none focus:ring-2 focus:ring-orange-500 font-bold placeholder-zinc-600" />
-                    <input type="text" value={investDescription} onChange={e => setInvestDescription(e.target.value)} placeholder="Descripción" className="w-full text-xs p-2.5 bg-zinc-900 text-white border border-zinc-800 rounded-xl outline-none focus:ring-2 focus:ring-orange-500 font-bold placeholder-zinc-600" />
-                    <button onClick={() => handleTransaction('inversion')} className="w-full bg-orange-600 text-white py-2 rounded-xl text-[10px] font-black uppercase tracking-wider shadow-md shadow-orange-600/10 active:scale-95 transition-transform border-b-2 border-orange-700">Registrar Inversión</button>
-                </div>
-                
-                <div className="bg-zinc-950 p-4 rounded-3xl border border-zinc-800 space-y-2 shadow-inner">
-                    <input type="number" value={tempWithdrawn} onChange={e => setTempWithdrawn(e.target.value)} placeholder="Monto Gasto" className="w-full text-xs p-2.5 bg-zinc-900 text-white border border-zinc-800 rounded-xl outline-none focus:ring-2 focus:ring-zinc-700 font-bold placeholder-zinc-600" />
-                    <input type="text" value={withdrawDescription} onChange={e => setWithdrawDescription(e.target.value)} placeholder="Descripción" className="w-full text-xs p-2.5 bg-zinc-900 text-white border border-zinc-800 rounded-xl outline-none focus:ring-2 focus:ring-zinc-700 font-bold placeholder-zinc-600" />
-                    <button onClick={() => handleTransaction('retiro')} className="w-full bg-zinc-800 text-zinc-200 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-zinc-700 active:scale-95 transition-transform border border-zinc-700/50">Registrar Gasto</button>
                 </div>
             </div>
 
@@ -355,15 +478,15 @@ export function FinancialOperationsModule() {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-zinc-800/60">
-                                {transactions.map(t => (
+                                {filteredTransactions.map(t => (
                                     <tr key={t.id} className="hover:bg-zinc-950/40 transition-colors">
                                         <td className="p-4 pl-8">
                                             <p className="font-bold text-zinc-200">{t.description}</p>
-                                            <span className={`text-[8px] px-2 py-0.5 rounded font-black uppercase tracking-wide border ${t.type === 'inversion' ? 'bg-orange-950/40 text-orange-400 border-orange-900/30' : 'bg-zinc-800 text-zinc-400 border-zinc-700'}`}>
+                                            <span className={`text-[8px] px-2 py-0.5 rounded font-black uppercase tracking-wide border ${t.type === 'ingreso' ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/30' : t.type === 'inversion' ? 'bg-indigo-950/40 text-indigo-400 border-indigo-900/30' : 'bg-red-950/40 text-red-400 border-red-900/30'}`}>
                                                 {t.type}
                                             </span>
                                         </td>
-                                        <td className={`p-4 text-right font-black text-base ${t.type === 'inversion' ? 'text-orange-500' : 'text-zinc-400'}`}>
+                                        <td className={`p-4 text-right font-black text-base ${t.type === 'ingreso' ? 'text-emerald-500' : t.type === 'inversion' ? 'text-indigo-500' : 'text-red-500'}`}>
                                             ${Number(t.amount).toLocaleString()}
                                         </td>
                                         <td className="p-4 pr-8 text-center text-zinc-500 text-[10px] font-bold">
@@ -389,7 +512,7 @@ export function FinancialOperationsModule() {
                     }}>
                         <div className="absolute inset-6 bg-zinc-900 rounded-full flex flex-col items-center justify-center border border-zinc-800/80 shadow-2xl">
                             <span className="text-[9px] text-zinc-500 font-black uppercase tracking-wider">Caja</span>
-                            <span className="text-lg font-black text-white tracking-tight">${netCashFlow.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            <span className="text-lg font-black text-white tracking-tight">${periodNetCashFlow.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                         </div>
                     </div>
                     <div className="w-full space-y-2">
@@ -405,6 +528,138 @@ export function FinancialOperationsModule() {
                     </div>
                 </div>
             </div>
+
+            {/* HISTORIAL DE PAGOS DE CLIENTES */}
+            <div className="bg-zinc-900 border border-zinc-800 rounded-[2.5rem] shadow-2xl overflow-hidden mt-6">
+                <div className="p-5 bg-black border-b border-zinc-800 flex justify-between items-center">
+                    <h3 className="font-black text-white text-xs uppercase tracking-widest flex items-center gap-2 italic">
+                        <DollarSign className="w-4 h-4 text-emerald-500" /> Historial de Pagos de Clientes
+                    </h3>
+                    <span className="text-[10px] font-black text-emerald-500 bg-emerald-500/10 px-3 py-1 rounded-full uppercase tracking-widest">
+                        {filteredPayments.length} Pagos
+                    </span>
+                </div>
+                <div className="overflow-x-auto max-h-[400px]">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-zinc-950 text-zinc-500 border-b border-zinc-800 sticky top-0 z-0">
+                            <tr className="text-[10px] font-black uppercase tracking-wider">
+                                <th className="p-4 pl-8">Cliente (Origen)</th>
+                                <th className="p-4 text-center">Método</th>
+                                <th className="p-4 text-right">Monto (USD)</th>
+                                <th className="p-4 text-right">Monto (Bs)</th>
+                                <th className="p-4 pr-8 text-center">Fecha</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-800/60">
+                            {filteredPayments.map((p, idx) => (
+                                <tr key={p.id || idx} className="hover:bg-zinc-950/40 transition-colors">
+                                    <td className="p-4 pl-8">
+                                        <p className="font-bold text-zinc-200">{p.customer_name || 'Desconocido'}</p>
+                                    </td>
+                                    <td className="p-4 text-center">
+                                        <span className="text-[8px] px-2 py-0.5 rounded font-black uppercase tracking-wide border bg-zinc-800 text-zinc-400 border-zinc-700">
+                                            {p.payment_method || 'N/A'}
+                                        </span>
+                                    </td>
+                                    <td className="p-4 text-right font-black text-base text-emerald-500">
+                                        ${Number(p.amount || 0).toLocaleString()}
+                                    </td>
+                                    <td className="p-4 text-right font-black text-sm text-zinc-400">
+                                        Bs. {Number(p.amount_bs || 0).toLocaleString()}
+                                    </td>
+                                    <td className="p-4 pr-8 text-center text-zinc-500 text-[10px] font-bold">
+                                        {new Date(p.created_at || p.payment_date).toLocaleDateString()}
+                                    </td>
+                                </tr>
+                            ))}
+                            {filteredPayments.length === 0 && (
+                                <tr>
+                                    <td colSpan={5} className="p-8 text-center text-zinc-500 font-bold text-xs uppercase tracking-widest">
+                                        No hay pagos registrados en este período.
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {/* MODAL DE REGISTRO DE TRANSACCIÓN MANUAL */}
+            {isTransactionModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-zinc-900 w-full max-w-md rounded-[2.5rem] border border-zinc-800 shadow-2xl overflow-hidden">
+                        <div className="flex justify-between items-center p-6 border-b border-zinc-800 bg-black">
+                            <div>
+                                <h2 className="font-black text-white uppercase tracking-tighter text-lg">Registrar Operación</h2>
+                                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest italic">Inversiones o Gastos Manuales</p>
+                            </div>
+                            <button onClick={() => setIsTransactionModalOpen(false)} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded-xl transition-all">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleTransaction} className="p-8 space-y-6">
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="text-xs font-black text-zinc-400 uppercase tracking-widest ml-1 mb-2 block">Tipo de Operación</label>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                        <button 
+                                            type="button" 
+                                            onClick={() => setTransactionType('ingreso')} 
+                                            className={`py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${transactionType === 'ingreso' ? 'bg-emerald-500/20 text-emerald-400 border-2 border-emerald-500' : 'bg-black text-zinc-500 border border-zinc-800'}`}
+                                        >
+                                            Ingreso
+                                        </button>
+                                        <button 
+                                            type="button" 
+                                            onClick={() => setTransactionType('inversion')} 
+                                            className={`py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${transactionType === 'inversion' ? 'bg-indigo-500/20 text-indigo-400 border-2 border-indigo-500' : 'bg-black text-zinc-500 border border-zinc-800'}`}
+                                        >
+                                            Inversión
+                                        </button>
+                                        <button 
+                                            type="button" 
+                                            onClick={() => setTransactionType('retiro')} 
+                                            className={`py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${transactionType === 'retiro' ? 'bg-red-500/20 text-red-400 border-2 border-red-500' : 'bg-black text-zinc-500 border border-zinc-800'}`}
+                                        >
+                                            Retiro
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                    <label className="text-xs font-black text-zinc-400 uppercase tracking-widest ml-1">Monto (USD)</label>
+                                    <div className="relative">
+                                        <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+                                        <input 
+                                            type="number" step="0.01" placeholder="0.00" required
+                                            value={transactionAmount} onChange={(e) => setTransactionAmount(e.target.value)}
+                                            className="w-full pl-10 pr-4 py-3.5 bg-black border border-zinc-800 rounded-xl font-bold text-sm text-white outline-none focus:ring-2 focus:ring-orange-500 transition-all"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                    <label className="text-xs font-black text-zinc-400 uppercase tracking-widest ml-1">Descripción / Concepto</label>
+                                    <input 
+                                        type="text" placeholder="Ej. Pago de luz, Compra de equipo..." required
+                                        value={transactionDesc} onChange={(e) => setTransactionDesc(e.target.value)}
+                                        className="w-full px-4 py-3.5 bg-black border border-zinc-800 rounded-xl font-bold text-sm text-white outline-none focus:ring-2 focus:ring-orange-500 transition-all"
+                                    />
+                                </div>
+                            </div>
+
+                            <button 
+                                type="submit" 
+                                disabled={isProcessing}
+                                className={`w-full py-4 text-white rounded-2xl font-black hover:opacity-90 disabled:opacity-50 transition-all shadow-xl uppercase text-xs tracking-widest border-b-2 ${transactionType === 'ingreso' ? 'bg-emerald-600 border-emerald-800' : transactionType === 'inversion' ? 'bg-indigo-600 border-indigo-800' : 'bg-red-600 border-red-800'}`}
+                            >
+                                {isProcessing ? <Loader2 className="animate-spin mx-auto" size={18} /> : 'Guardar Operación'}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

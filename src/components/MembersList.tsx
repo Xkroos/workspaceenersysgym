@@ -269,7 +269,11 @@ export function MembersList({ refresh }: { refresh: boolean }) {
                                 <button onClick={() => setRenewalTarget(m)} className="flex items-center gap-2 px-4 py-2.5 bg-zinc-900 text-orange-500 rounded-xl text-[9px] font-black hover:bg-orange-600 hover:text-white transition-all uppercase tracking-widest border border-zinc-800 hover:border-transparent">
                                     <RefreshCw size={12} /> Renovar
                                 </button>
-                                <button onClick={() => setPaymentTarget(m)} className="flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl text-[9px] font-black hover:bg-emerald-700 transition-all uppercase tracking-widest shadow-lg shadow-emerald-600/10 border-b-2 border-emerald-800">
+                                <button 
+                                    onClick={() => setPaymentTarget(m)} 
+                                    disabled={m.remaining === 0}
+                                    className="flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl text-[9px] font-black hover:bg-emerald-700 transition-all uppercase tracking-widest shadow-lg shadow-emerald-600/10 border-b-2 border-emerald-800 disabled:bg-zinc-800 disabled:border-zinc-900 disabled:text-zinc-500 disabled:shadow-none"
+                                >
                                     <DollarSign size={12} /> Pagar
                                 </button>
                                 <button onClick={() => setEditTarget(m)} className="p-2.5 bg-zinc-900 text-zinc-400 rounded-xl hover:bg-zinc-800 hover:text-white transition-all border border-zinc-800">

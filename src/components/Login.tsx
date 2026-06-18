@@ -38,71 +38,52 @@ export function Login() {
         <div className="min-h-screen bg-black text-white flex flex-col justify-between font-sans selection:bg-orange-600 selection:text-white">
             
             {/* CONTENEDOR PRINCIPAL */}
-            <div className="flex-1 flex items-center justify-center w-full max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 items-center gap-8 p-4 sm:p-8">
+            <div className="flex-1 flex flex-col items-center justify-center w-full max-w-md mx-auto p-4 sm:p-8 animate-in fade-in zoom-in-95 duration-500">
                 
-                {/* COLUMNA IZQUIERDA: Imagen de la Atleta */}
-                <div className="hidden md:flex justify-center items-center pr-4">
+                {/* LOGO DE ENERGYM */}
+                <div className="flex flex-col items-center w-full mb-8">
                     <img 
-                        src="/foto" 
-                        alt="Energym Athlete" 
-                        className="max-h-[80vh] w-auto object-contain animate-fade-in"
-                        onError={(e) => {
-                            e.currentTarget.src = "https://images.unsplash.com/photo-1541534741688-6078c6bfb5c5?q=80&w=1000&auto=format&fit=crop";
-                        }}
+                        src="/energym_logo.jpg" 
+                        alt="Energym Logo" 
+                        className="w-full max-w-[280px] h-auto object-contain drop-shadow-2xl mb-4" 
                     />
+                    <p className="text-gray-400 text-xs mt-2 font-mono tracking-widest uppercase">
+                        J-504846821
+                    </p>
+                    <p className="text-orange-500 text-[10px] sm:text-xs font-bold uppercase tracking-widest mt-2 italic">
+                        ¡Transformamos cuerpos y mentes!
+                    </p>
                 </div>
 
-                {/* COLUMNA DERECHA: Branding y Formulario */}
-                <div className="w-full max-w-md mx-auto flex flex-col justify-center px-4">
-                    
-                    {/* LOGO DE ENERGYM */}
-                    <div className="flex flex-col items-center md:items-start mb-6">
-                        <div className="mb-4">
-                            <img 
-                                src="" 
-                                alt="Energym Logo" 
-                                className="h-28 w-auto object-contain" 
-                            />
-                        </div>
-                        <h1 className="text-3xl sm:text-4xl font-black italic tracking-wide text-center md:text-left uppercase">
-                            Energym Fitness Center
-                        </h1>
-                        <p className="text-gray-400 text-xs mt-1 font-mono tracking-widest uppercase">
-                            J-504846821
-                        </p>
-                        <p className="text-orange-500 text-[10px] sm:text-xs font-bold uppercase tracking-widest mt-2 italic">
-                            ¡Transformamos cuerpos y mentes!
-                        </p>
-                    </div>
-
-                    {/* FORMULARIO */}
+                {/* FORMULARIO */}
+                <div className="w-full">
                     <form onSubmit={handleSubmit} className="space-y-4">
                         
                         {/* INPUT: Email / Usuario */}
-                        <div className="relative">
-                            <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
-                                <Mail className="text-orange-500 w-5 h-5" />
+                        <div className="relative group">
+                            <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none transition-colors group-focus-within:text-orange-500 text-zinc-500">
+                                <Mail className="w-5 h-5" />
                             </div>
                             <input
                                 type="email"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
-                                className="w-full pl-12 pr-4 py-3.5 bg-zinc-700/80 text-gray-200 font-medium placeholder-gray-400 rounded-full border border-transparent focus:outline-none focus:bg-zinc-700 focus:border-orange-500 transition-all text-sm"
+                                className="w-full pl-12 pr-4 py-3.5 bg-zinc-900 text-gray-200 font-medium placeholder-zinc-500 rounded-2xl border border-zinc-800 focus:outline-none focus:bg-zinc-800 focus:border-orange-500 transition-all text-sm shadow-inner"
                                 placeholder="Usuario (Email)"
                                 required
                             />
                         </div>
                         
                         {/* INPUT: Contraseña */}
-                        <div className="relative">
-                            <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
-                                <Lock className="text-orange-500 w-5 h-5" />
+                        <div className="relative group">
+                            <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none transition-colors group-focus-within:text-orange-500 text-zinc-500">
+                                <Lock className="w-5 h-5" />
                             </div>
                             <input
                                 type="password"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
-                                className="w-full pl-12 pr-4 py-3.5 bg-zinc-700/80 text-gray-200 font-medium placeholder-gray-400 rounded-full border border-transparent focus:outline-none focus:bg-zinc-700 focus:border-orange-500 transition-all text-sm"
+                                className="w-full pl-12 pr-4 py-3.5 bg-zinc-900 text-gray-200 font-medium placeholder-zinc-500 rounded-2xl border border-zinc-800 focus:outline-none focus:bg-zinc-800 focus:border-orange-500 transition-all text-sm shadow-inner"
                                 placeholder="Contraseña"
                                 required
                             />
@@ -110,36 +91,35 @@ export function Login() {
                         
                         {/* MENSAJE DE ERROR */}
                         {error && (
-                            <div className="text-red-400 text-xs bg-red-950/50 border border-red-900 px-4 py-2 rounded-xl text-center">
+                            <div className="text-red-400 text-xs bg-red-950/50 border border-red-900 px-4 py-3 rounded-xl text-center font-bold">
                                 {error}
                             </div>
                         )}
                         
                         {/* BOTÓN LOGIN */}
-                        <div className="pt-2">
+                        <div className="pt-4">
                             <button
                                 type="submit"
                                 disabled={loading}
-                                className="w-full py-3 bg-gradient-to-r from-orange-600 to-orange-500 text-white font-black uppercase tracking-widest rounded-full hover:from-orange-500 hover:to-orange-400 active:scale-[0.99] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-orange-600/20 text-sm border-b-4 border-orange-700"
+                                className="w-full py-3.5 bg-orange-600 text-white font-black uppercase tracking-widest rounded-2xl hover:bg-orange-500 active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-xl shadow-orange-900/20 text-sm border-b-4 border-orange-700 hover:border-orange-600"
                             >
-                                {loading ? 'Procesando...' : 'Iniciar Sesion'}
+                                {loading ? 'Procesando...' : 'Iniciar Sesión'}
                             </button>
                         </div>
                         
                     </form>
                     
-                    {/* ENLACE DE AYUDA (Centrado ahora que no está el botón de crear cuenta) */}
-                    <div className="mt-6 flex justify-center text-xs text-zinc-500 font-medium">
+                    {/* ENLACE DE AYUDA */}
+                    <div className="mt-8 flex justify-center text-xs text-zinc-500 font-medium">
                         <a 
                             href="https://wa.me/584128847390"
                             target="_blank" 
                             rel="noopener noreferrer" 
-                            className="hover:text-orange-400 transition-colors flex items-center gap-1 uppercase tracking-tight"
+                            className="hover:text-orange-400 transition-colors flex items-center gap-1.5 uppercase tracking-wider"
                         >
-                            <HelpCircle size={14}/> Necesitas Ayuda?
+                            <HelpCircle size={14}/> ¿Necesitas Ayuda?
                         </a>
                     </div>
-
                 </div>
             </div>
 

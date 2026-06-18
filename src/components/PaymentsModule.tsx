@@ -22,6 +22,7 @@ export function PaymentsModule() {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
     const [inspectCustomer, setInspectCustomer] = useState<any | null>(null);
+    const [allPayments, setAllPayments] = useState<any[]>([]);
 
     useEffect(() => {
         fetchCustomers();
@@ -30,13 +31,18 @@ export function PaymentsModule() {
     const fetchCustomers = async () => {
         setLoading(true);
         try {
-            const { data, error } = await supabase
+            const { data: memData, error: memErr } = await supabase
                 .from('memberships')
                 .select('*')
                 .order('customer_name', { ascending: true });
 
-            if (error) throw error;
-            setCustomers(data || []);
+            if (memErr) throw memErr;
+            setCustomers(memData || []);
+
+            const { data: payData } = await supabase
+                .from('payments')
+                .select('membership_id, reference_number');
+            if (payData) setAllPayments(payData);
         } catch (err) {
             console.error("Error cargando Miembro:", err);
         } finally {
@@ -47,8 +53,9 @@ export function PaymentsModule() {
     // Función auxiliar para calcular o formatear el vencimiento en tiempo real
     const getExpirationDate = (customer: any) => {
         // 1. Si ya existe una fecha de vencimiento explícita en la base de datos, la usamos
-        if (customer.expiration_date) {
-            return format(new Date(customer.expiration_date), "dd MMM, yyyy", { locale: es });
+        if (customer.end_date) {
+            // Añadimos T12:00:00 para evitar problemas de zona horaria al formatear
+            return format(new Date(customer.end_date + 'T12:00:00'), "dd MMM, yyyy", { locale: es });
         }
         
         // 2. Si no existe, la calculamos sumando 30 días a la fecha de registro (created_at)
@@ -61,9 +68,16 @@ export function PaymentsModule() {
         return 'No registrada';
     };
 
-    const filteredCustomers = customers.filter(c => 
-        c.customer_name?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const filteredCustomers = customers.filter(c => {
+        const term = searchTerm.toLowerCase();
+        const matchesName = c.customer_name?.toLowerCase().includes(term);
+        const matchesRef = allPayments.some(p => 
+            p.membership_id === c.id && 
+            p.reference_number && 
+            p.reference_number.toLowerCase().includes(term)
+        );
+        return matchesName || matchesRef;
+    });
 
     if (selectedCustomerId) {
         return <CustomerDetails customerId={selectedCustomerId} onBack={() => setSelectedCustomerId(null)} />;
@@ -86,7 +100,7 @@ export function PaymentsModule() {
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" size={18} />
                     <input 
                         type="text"
-                        placeholder="Buscar Miembro por nombre..."
+                        placeholder="Buscar por nombre o referencia..."
                         className="w-full pl-12 pr-4 py-4 bg-zinc-900 border border-zinc-800 rounded-[1.5rem] outline-none focus:ring-4 focus:ring-orange-500/5 focus:border-orange-500 font-bold text-sm text-white shadow-xl transition-all"
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
@@ -112,40 +126,40 @@ export function PaymentsModule() {
                                     <User size={24} />
                                 </div>
                                 <div className="flex-1 overflow-hidden">
-                                    <h3 className="font-black text-zinc-100 uppercase truncate text-sm tracking-tight">
+                                    <h3 className="font-black text-zinc-100 uppercase truncate text-base tracking-tight">
                                         {customer.customer_name}
                                     </h3>
                                     <div className="flex items-center gap-2">
                                         <div className={`w-2 h-2 rounded-full ${customer.status_member === 'activo' ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                                        <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">{customer.status_member}</p>
+                                        <p className="text-xs font-black text-zinc-400 uppercase tracking-widest">{customer.status_member}</p>
                                     </div>
                                 </div>
                             </div>
 
                             <div className="space-y-2 pt-4 border-t border-zinc-800">
-                                <div className="flex items-center justify-between text-[10px] font-bold text-zinc-500 uppercase italic">
-                                    <span className="flex items-center gap-1"><Calendar size={12}/> Vence:</span>
+                                <div className="flex items-center justify-between text-xs font-bold text-zinc-400 uppercase italic">
+                                    <span className="flex items-center gap-1"><Calendar size={14}/> Vence:</span>
                                     {/* AQUÍ SE EJECUTA EL CÁLCULO EN TIEMPO REAL */}
-                                    <span className="text-zinc-300 font-black uppercase tracking-tight">
+                                    <span className="text-zinc-100 font-black uppercase tracking-tight text-sm">
                                         {getExpirationDate(customer)}
                                     </span>
                                 </div>
-                                <div className="flex items-center justify-between text-[10px] font-bold text-zinc-500 uppercase italic">
-                                    <span className="flex items-center gap-1"><Activity size={12}/> Plan:</span>
-                                    <span className="text-orange-500 font-black">{customer.plan_name}</span>
+                                <div className="flex items-center justify-between text-xs font-bold text-zinc-400 uppercase italic">
+                                    <span className="flex items-center gap-1"><Activity size={14}/> Plan:</span>
+                                    <span className="text-orange-500 font-black text-sm">{customer.plan_name}</span>
                                 </div>
                             </div>
 
                             <div className="grid grid-cols-1 gap-2 mt-6">
                                 <button 
                                     onClick={() => setSelectedCustomerId(customer.id)}
-                                    className="flex items-center justify-center gap-2 py-3 bg-black text-white border border-zinc-800/80 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-orange-600 hover:border-orange-600 transition-all"
+                                    className="flex items-center justify-center gap-2 py-3 bg-black text-white border border-zinc-800/80 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-orange-600 hover:border-orange-600 transition-all"
                                 >
                                     <CreditCard size={14} /> Historial de Pagos
                                 </button>
                                 <button 
                                     onClick={() => setInspectCustomer(customer)}
-                                    className="flex items-center justify-center gap-2 py-3 bg-zinc-950 text-zinc-400 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-zinc-800 transition-all"
+                                    className="flex items-center justify-center gap-2 py-3 bg-zinc-950 text-zinc-300 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-zinc-800 transition-all"
                                 >
                                     Ver Datos del Miembro <ChevronRight size={14} />
                                 </button>

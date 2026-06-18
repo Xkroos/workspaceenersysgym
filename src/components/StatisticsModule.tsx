@@ -20,7 +20,7 @@ interface Membership {
     price: number;
     start_date: string;
     end_date: string;
-    status: string;
+    status_member: string;
     user_id: string;
 }
 
@@ -28,6 +28,7 @@ interface Payment {
     id: string;
     membership_id: string;
     amount: number;
+    created_at?: string;
 }
 
 interface CalendarEvent {
@@ -46,6 +47,60 @@ interface DailyInfo {
     events: CalendarEvent[];
     totalDueToday: number;
 }
+
+// ====================================================================
+// MODAL DE LISTA GENÉRICA
+// ====================================================================
+
+const ListModal = ({ title, items, type, onClose }: { title: string, items: any[], type: 'member' | 'payment' | 'debt', onClose: () => void }) => {
+    return (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 z-[100] animate-in fade-in">
+            <div className="bg-zinc-900 rounded-[2.5rem] shadow-2xl max-w-lg w-full max-h-[80vh] overflow-hidden flex flex-col border border-zinc-800">
+                <div className="px-6 py-5 border-b border-zinc-800 flex justify-between items-center bg-black">
+                    <h3 className="font-black text-white uppercase tracking-tighter text-sm">{title}</h3>
+                    <button onClick={onClose} className="p-2 hover:bg-zinc-800 text-zinc-500 hover:text-white rounded-xl transition-all"><X size={20}/></button>
+                </div>
+                <div className="p-6 overflow-y-auto space-y-3">
+                    {items.length === 0 ? (
+                        <p className="text-center text-slate-500 font-bold text-xs uppercase tracking-widest py-8">No hay registros</p>
+                    ) : items.map((item, i) => (
+                        <div key={i} className="p-4 bg-black border border-zinc-800 rounded-2xl flex justify-between items-center">
+                            {type === 'member' && (
+                                <>
+                                    <div>
+                                        <p className="font-black text-white text-sm uppercase">{item.customer_name}</p>
+                                        <p className="text-[10px] font-bold text-zinc-500">{item.phone || 'Sin teléfono'}</p>
+                                    </div>
+                                    <span className={`text-[10px] font-black uppercase px-3 py-1 rounded-full border ${item.status_member === 'activo' ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/50' : 'bg-red-950/40 text-red-400 border-red-900/50'}`}>
+                                        {item.status_member === 'activo' ? 'AL DÍA' : 'PENDIENTE'}
+                                    </span>
+                                </>
+                            )}
+                            {type === 'payment' && (
+                                <>
+                                    <div>
+                                        <p className="font-black text-white text-sm uppercase">{item.customer_name || `Pago #${item.id.substring(0,6)}`}</p>
+                                        <p className="text-[10px] font-bold text-zinc-500">{item.created_at ? format(new Date(item.created_at), "dd MMM yyyy", { locale: es }) : 'N/A'}</p>
+                                    </div>
+                                    <p className="font-black text-emerald-500">${Number(item.amount).toFixed(2)}</p>
+                                </>
+                            )}
+                            {type === 'debt' && (
+                                <>
+                                    <div>
+                                        <p className="font-black text-white text-sm uppercase">{item.customer_name}</p>
+                                        <p className="text-[10px] font-bold text-orange-500 uppercase tracking-widest">Pago Pendiente</p>
+                                    </div>
+                                    <p className="font-black text-red-500">Deuda: ${item.debt.toFixed(2)}</p>
+                                </>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+};
 
 // ====================================================================
 // MODAL DE DETALLES DEL DÍA
@@ -154,7 +209,7 @@ const PaymentCalendar: React.FC<{ memberships: Membership[]; onClose: () => void
                 type: m.plan_name,
                 membership_id: m.id,
                 amount_due: m.price,
-                is_overdue: isBefore(dueDate, now) && m.status !== 'pagado',
+                is_overdue: isBefore(dueDate, now) && m.status_member !== 'pagado',
                 original_start_date: new Date(m.start_date + 'T12:00:00'),
             });
             acc[key].totalDueToday += Number(m.price);
@@ -212,6 +267,7 @@ export function StatisticsModule() {
     const [memberships, setMemberships] = useState<Membership[]>([]);
     const [payments, setPayments] = useState<Payment[]>([]);
     const [isCalendarOpen, setIsCalendarOpen] = useState(false); 
+    const [activeList, setActiveList] = useState<'all' | 'inactive' | 'paid' | 'pending' | null>(null);
     
 
     const loadData = useCallback(async () => {
@@ -254,36 +310,76 @@ export function StatisticsModule() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <StatCard icon={<ShoppingBag/>} color="orange" label="Miembros Inscritos" value={stats.count} />
-                <StatCard icon={<UserX/>} color="red" label="Inactivos" value={stats.inactive} subtext="Vencidos" />
-                <StatCard icon={<TrendingUp/>} color="green" label="Caja" value={`$${stats.paid.toFixed(2)}`}  />
-                <StatCard icon={<DollarSign/>} color="yellow" label="Pendiente" value={`$${stats.pending.toFixed(2)}`} />
+                <StatCard icon={<ShoppingBag/>} color="orange" label="Miembros Inscritos" value={stats.count} onClick={() => setActiveList('all')} />
+                <StatCard icon={<UserX/>} color="red" label="Inactivos" value={stats.inactive} subtext="Vencidos" onClick={() => setActiveList('inactive')} />
+                <StatCard icon={<TrendingUp/>} color="green" label="Caja" value={`$${stats.paid.toFixed(2)}`} onClick={() => setActiveList('paid')} />
+                <StatCard icon={<DollarSign/>} color="yellow" label="Pendiente" value={`$${stats.pending.toFixed(2)}`} onClick={() => setActiveList('pending')} />
             </div>
+
+            {activeList === 'all' && (
+                <ListModal 
+                    title="Miembros Inscritos" 
+                    items={memberships} 
+                    type="member" 
+                    onClose={() => setActiveList(null)} 
+                />
+            )}
+            {activeList === 'inactive' && (
+                <ListModal 
+                    title="Miembros Inactivos" 
+                    items={memberships.filter(m => isBefore(new Date(m.end_date + 'T12:00:00'), startOfDay(new Date())))} 
+                    type="member" 
+                    onClose={() => setActiveList(null)} 
+                />
+            )}
+            {activeList === 'paid' && (
+                <ListModal 
+                    title="Ingresos Registrados (Caja)" 
+                    items={payments.map(p => ({ ...p, customer_name: memberships.find(m => m.id === p.membership_id)?.customer_name }))} 
+                    type="payment" 
+                    onClose={() => setActiveList(null)} 
+                />
+            )}
+            {activeList === 'pending' && (
+                <ListModal 
+                    title="Cuentas por Cobrar" 
+                    items={memberships.map(m => {
+                        const price = Number(m.price) || 0;
+                        const paid = payments.filter(p => p.membership_id === m.id).reduce((s, p) => s + Number(p.amount), 0);
+                        return { ...m, debt: price > paid ? (price - paid) : 0 };
+                    }).filter(m => m.debt > 0)} 
+                    type="debt" 
+                    onClose={() => setActiveList(null)} 
+                />
+            )}
 
             {isCalendarOpen && <PaymentCalendar memberships={memberships} onClose={() => setIsCalendarOpen(false)} />}
         </div>
     );
 }
 
-function StatCard({ icon, color, label, value, bs }: any) {
+function StatCard({ icon, color, label, value, bs, onClick }: any) {
     const colors: any = { 
-        orange: 'bg-orange-50 text-orange-600 border-orange-500', 
-        red: 'bg-red-50 text-red-600 border-red-500', 
-        green: 'bg-green-50 text-green-600 border-green-500', 
-        yellow: 'bg-yellow-50 text-yellow-600 border-yellow-500' 
+        orange: 'bg-orange-950/40 text-orange-500 border-orange-500', 
+        red: 'bg-red-950/40 text-red-500 border-red-500', 
+        green: 'bg-emerald-950/40 text-emerald-500 border-emerald-500', 
+        yellow: 'bg-yellow-950/40 text-yellow-500 border-yellow-500' 
     };
 
     return (
-        <div className={`bg-white dark:bg-slate-800 border rounded-3xl p-6 shadow-sm border-b-4 ${colors[color].split(' ')[2]}`}>
+        <div 
+            onClick={onClick}
+            className={`bg-zinc-900 border-zinc-800 rounded-[2rem] p-6 shadow-xl border-b-4 border-l border-t border-r ${colors[color].split(' ')[2]} ${onClick ? 'cursor-pointer hover:scale-[1.02] hover:bg-zinc-800/80 transition-all' : ''}`}
+        >
             <div className="flex items-center gap-4">
                 <div className={`p-4 rounded-2xl ${colors[color].split(' ')[0]} ${colors[color].split(' ')[1]}`}>
                     {icon}
                 </div>
                 <div className="flex-1 min-w-0">
-                    <p className="text-slate-400 text-[9px] font-black uppercase tracking-[0.2em]">{label}</p>
-                    <p className="text-2xl font-black text-slate-800 dark:text-white truncate tracking-tighter">{value}</p>
+                    <p className="text-zinc-500 text-[9px] font-black uppercase tracking-[0.2em]">{label}</p>
+                    <p className="text-2xl font-black text-white truncate tracking-tighter">{value}</p>
                     {bs !== null && bs !== undefined && (
-                        <p className="text-[10px] text-slate-400 mt-1 font-bold">Bs. {bs.toLocaleString('es-VE', { minimumFractionDigits: 2 })}</p>
+                        <p className="text-[10px] text-zinc-600 mt-1 font-bold">Bs. {bs.toLocaleString('es-VE', { minimumFractionDigits: 2 })}</p>
                     )}
                 </div>
             </div>

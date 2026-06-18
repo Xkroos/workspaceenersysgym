@@ -4,9 +4,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { 
     UserPlus, Camera, Phone, User, 
     CheckCircle2, AlertCircle, X, Loader2,
-    Star
+    Star, DollarSign, CreditCard, Hash
 } from 'lucide-react';
 import { addDays, format } from 'date-fns';
+import { ImageUpload } from './ImageUpload';
 
 interface Plan {
     id: string;
@@ -32,6 +33,10 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
     
     const [previewUrl, setPreviewUrl] = useState<string | null>(initialData?.photo_url || null);
 
+    const [paymentMethod, setPaymentMethod] = useState('Efectivo');
+    const [referenceNumber, setReferenceNumber] = useState('');
+    const [paymentImageUrl, setPaymentImageUrl] = useState('');
+
     const [formData, setFormData] = useState({
         customer_name: initialData?.customer_name || '',
         cedula: initialData?.cedula || '',
@@ -46,12 +51,53 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
         role: initialData?.role || 'socio' 
     });
 
+    const isAlreadyPaid = initialData?.status === 'pagado';
+    const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+
+    const [bcvRate, setBcvRate] = useState<number>(0);
+    const [amountInBs, setAmountInBs] = useState<number>(0);
+
+    useEffect(() => {
+        const floatAmount = Number(formData.price);
+        if (!isNaN(floatAmount) && bcvRate > 0) {
+            setAmountInBs(floatAmount * bcvRate);
+        } else {
+            setAmountInBs(0);
+        }
+    }, [formData.price, bcvRate]);
+
     useEffect(() => { 
         if (user?.id) {
             fetchPlans();
             fetchTrainers(); 
+            fetchBCVRate();
         } 
     }, [user?.id]);
+
+    useEffect(() => {
+        if (formData.plan_id && formData.start_date && plans.length > 0) {
+            const selectedPlan = plans.find(p => p.id === formData.plan_id);
+            if (selectedPlan) {
+                const calculatedEnd = addDays(new Date(formData.start_date + 'T12:00:00'), selectedPlan.duration_days);
+                const newEndDate = format(calculatedEnd, 'yyyy-MM-dd');
+                if (newEndDate !== formData.end_date) {
+                    setFormData(prev => ({ ...prev, end_date: newEndDate }));
+                }
+            }
+        }
+    }, [formData.start_date, formData.plan_id, plans]);
+
+    const fetchBCVRate = async () => {
+        try {
+            const response = await fetch('https://ve.dolarapi.com/v1/dolares/oficial');
+            const data = await response.json();
+            if (data && data.promedio) {
+                setBcvRate(data.promedio);
+            }
+        } catch (err) {
+            console.error("Error obteniendo tasa de DolarAPI:", err);
+        }
+    };
 
     async function fetchPlans() {
         const { data } = await supabase.from('membership_types').select('*').eq('user_id', user?.id);
@@ -130,19 +176,42 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
         e.preventDefault();
         setLoading(true);
         
-        const payload = {
+        const payload: any = {
             ...formData,
+            status_member: formData.status === 'pagado' ? 'activo' : 'pendiente',
             user_id: user?.id,
             plan_name: plans.find(p => p.id === formData.plan_id)?.name || initialData?.plan_name
         };
+        delete payload.status;
 
-        const { error } = initialData?.id 
-            ? await supabase.from('memberships').update(payload).eq('id', initialData.id)
-            : await supabase.from('memberships').insert([payload]);
+        const { data, error } = initialData?.id 
+            ? await supabase.from('memberships').update(payload).eq('id', initialData.id).select()
+            : await supabase.from('memberships').insert([payload]).select();
 
         if (error) {
             setMessage({ type: 'error', text: 'Error: ' + error.message });
         } else {
+            const membershipId = initialData?.id || (data && data[0]?.id);
+            const isPayingNow = formData.status === 'pagado' && !isAlreadyPaid;
+
+            if (isPayingNow && membershipId) {
+                const { error: paymentError } = await supabase.from('payments').insert([{
+                    membership_id: membershipId,
+                    user_id: user?.id,
+                    amount: formData.price,
+                    amount_bs: amountInBs,
+                    bcv_rate: bcvRate,
+                    payment_method: paymentMethod,
+                    reference_number: referenceNumber,
+                    payment_image_url: paymentImageUrl,
+                    description: `Pago inicial de membresía (${payload.plan_name}) - Tasa BCV: ${bcvRate} Bs.`
+                }]);
+
+                if (paymentError) {
+                    console.error("Error al registrar el pago inicial:", paymentError);
+                }
+            }
+
             setMessage({ type: 'success', text: initialData?.id ? '¡Datos actualizados!' : '¡Miembro registrado con éxito!' });
             if (onSuccess) onSuccess();
             setTimeout(() => { if (onClose) onClose(); }, 1500);
@@ -150,10 +219,11 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
         setLoading(false);
     }
 
+
     return (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-[2.5rem] overflow-hidden shadow-2xl w-full max-w-2xl mx-auto text-white">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-[2.5rem] overflow-hidden shadow-2xl w-full max-w-2xl mx-auto text-white flex flex-col max-h-[90vh]">
             {/* CABECERA CON ESTILO ENERGYM */}
-            <div className="bg-black p-5 border-b border-zinc-800 flex justify-between items-center">
+            <div className="bg-black p-5 border-b border-zinc-800 flex justify-between items-center shrink-0">
                 <div className="flex items-center gap-2">
                     <UserPlus className="w-5 h-5 text-orange-500" />
                     <span className="font-black uppercase tracking-wider text-xs italic">
@@ -167,7 +237,7 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
                 )}
             </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-6">
+            <form onSubmit={handleSubmit} className="p-6 space-y-6 overflow-y-auto custom-scroll">
                 {message && (
                     <div className={`p-4 rounded-xl flex items-center gap-3 animate-in fade-in zoom-in border ${message.type === 'success' ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/30' : 'bg-red-950/40 text-red-400 border-red-900/30'}`}>
                         {message.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
@@ -242,12 +312,75 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
                         <div className="space-y-1">
                             <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Estatus de Pago</label>
                             <select className="w-full p-2.5 bg-zinc-900 border border-zinc-800 rounded-xl outline-none focus:ring-2 focus:ring-orange-500 font-bold text-sm text-zinc-300" 
-                                value={formData.status} onChange={e => setFormData({...formData, status: e.target.value as any})}>
+                                value={formData.status} onChange={e => {
+                                    const val = e.target.value as any;
+                                    setFormData({...formData, status: val});
+                                    if (val === 'pagado' && !isAlreadyPaid) setIsPaymentModalOpen(true);
+                                }}>
                                 <option value="pendiente">🟠 Pendiente</option>
                                 <option value="pagado">🟢 Pagado</option>
                             </select>
                         </div>
                     </div>
+
+                    {isPaymentModalOpen && (
+                        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[150] flex items-center justify-center p-4">
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-[2.5rem] p-6 space-y-6 w-full max-w-md animate-in zoom-in-95 duration-300 shadow-2xl relative">
+                                <button type="button" onClick={() => {
+                                    setFormData({...formData, status: 'pendiente'});
+                                    setIsPaymentModalOpen(false);
+                                }} className="absolute top-6 right-6 p-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl text-zinc-400 hover:text-red-500 transition-all z-10">
+                                    <X size={20} />
+                                </button>
+                                
+                                <h4 className="text-lg font-black uppercase tracking-wide text-orange-500 flex items-center gap-2 border-b border-zinc-800 pb-4">
+                                    <DollarSign className="w-6 h-6" /> Detalles del Pago
+                                </h4>
+                                
+                                <div className="space-y-4">
+                                    <div className="space-y-1">
+                                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider flex items-center gap-1">
+                                            <CreditCard className="w-3.5 h-3.5 text-orange-500" /> Método de Pago
+                                        </label>
+                                        <select 
+                                            className="w-full p-3 bg-black border border-zinc-800 rounded-xl outline-none focus:ring-2 focus:ring-orange-500 font-bold text-sm text-zinc-300"
+                                            value={paymentMethod}
+                                            onChange={e => setPaymentMethod(e.target.value)}
+                                        >
+                                            <option value="Efectivo">Efectivo</option>
+                                            <option value="Divisas">Divisas</option>
+                                            <option value="Pago movil">Pago móvil</option>
+                                            <option value="Zelle">Zelle</option>
+                                        </select>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider flex items-center gap-1">
+                                            <Hash className="w-3.5 h-3.5 text-orange-500" /> Referencia (Opcional)
+                                        </label>
+                                        <input 
+                                            type="text" 
+                                            placeholder="Nro de Referencia" 
+                                            className="w-full p-3 bg-black border border-zinc-800 rounded-xl outline-none focus:ring-2 focus:ring-orange-500 font-bold text-sm text-zinc-300 placeholder-zinc-700"
+                                            value={referenceNumber}
+                                            onChange={e => setReferenceNumber(e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="space-y-1.5 flex flex-col justify-between pt-2 border-t border-zinc-800">
+                                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider ml-1">Comprobante de Pago (Opcional)</label>
+                                        <div className="bg-black rounded-2xl border-2 border-dashed border-zinc-800 p-2">
+                                            <ImageUpload onImageSelected={setPaymentImageUrl} disabled={loading} />
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div className="pt-2">
+                                    <button type="button" onClick={() => setIsPaymentModalOpen(false)} className="w-full py-4 bg-orange-600 text-white font-black uppercase tracking-widest rounded-2xl hover:bg-orange-500 transition-all text-sm border-b-4 border-orange-700 shadow-xl shadow-orange-900/20 active:scale-95">
+                                        Confirmar Detalles
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-1">

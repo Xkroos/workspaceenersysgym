@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 interface CustomerDetailsProps {
   customerId: string;
@@ -61,6 +63,67 @@ export function CustomerDetails({ customerId, onBack }: CustomerDetailsProps) {
     }
   };
 
+  const generateMemberPDF = () => {
+    if (!customer) return;
+    
+    const doc = new jsPDF();
+    const dateStr = new Date().toLocaleDateString();
+
+    doc.setFontSize(20);
+    doc.setTextColor(249, 115, 22);
+    doc.text('ENERGYM FITNESS CENTER', 14, 20);
+    
+    doc.setFontSize(12);
+    doc.setTextColor(30, 30, 36);
+    doc.text(`HISTORIAL DE PAGOS: ${customer.customer_name.toUpperCase()}`, 14, 30);
+    doc.setFontSize(10);
+    doc.text(`Fecha de emisión: ${dateStr}`, 14, 37);
+
+    let totalUSD = 0;
+    let totalBs = 0;
+
+    const tableRows = payments.map(p => {
+      const pUSD = Number(p.amount) || 0;
+      const pBs = Number(p.amount_bs) || 0;
+      totalUSD += pUSD;
+      totalBs += pBs;
+
+      return [
+        format(new Date(p.created_at), "dd/MM/yyyy", { locale: es }),
+        p.payment_method || 'N/A',
+        p.reference_number || '---',
+        `$${pUSD.toLocaleString()}`,
+        `Bs. ${pBs.toLocaleString()}`
+      ];
+    });
+
+    tableRows.push([
+      'TOTALES',
+      '',
+      '',
+      `$${totalUSD.toLocaleString()}`,
+      `Bs. ${totalBs.toLocaleString()}`
+    ]);
+
+    autoTable(doc, {
+      startY: 45,
+      head: [['Fecha', 'Método', 'Referencia', 'Monto (USD)', 'Monto (Bs)']],
+      body: tableRows,
+      theme: 'striped',
+      headStyles: { fillColor: [249, 115, 22] },
+      styles: { fontSize: 9 },
+      columnStyles: { 3: { halign: 'right' }, 4: { halign: 'right' } },
+      didParseCell: function(data) {
+        if (data.row.index === tableRows.length - 1) {
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.textColor = [249, 115, 22];
+        }
+      }
+    });
+
+    doc.save(`Historial_${customer.customer_name.replace(/\s+/g, '_')}_${dateStr}.pdf`);
+  };
+
   if (loading) return (
     <div className="flex flex-col items-center justify-center py-20 gap-4">
       <Clock className="animate-spin text-orange-500" size={40} />
@@ -85,18 +148,18 @@ export function CustomerDetails({ customerId, onBack }: CustomerDetailsProps) {
                 <User size={40} />
               </div>
               <h2 className="text-xl font-black text-white uppercase tracking-tighter italic">{customer?.customer_name}</h2>
-              <span className={`mt-2 px-4 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border ${customer?.status_member === 'activo' ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/50' : 'bg-red-950/40 text-red-400 border-red-900/50'}`}>
+              <span className={`mt-2 px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${customer?.status_member === 'activo' ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/50' : 'bg-red-950/40 text-red-400 border-red-900/50'}`}>
                 {customer?.status_member}
               </span>
             </div>
             <div className="mt-8 space-y-4">
               <div className="p-4 bg-black rounded-2xl border border-zinc-800">
-                <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Plan Actual</p>
-                <p className="text-sm font-black text-orange-500 uppercase italic">{customer?.plan_name}</p>
+                <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-1">Plan Actual</p>
+                <p className="text-base font-black text-orange-500 uppercase italic">{customer?.plan_name}</p>
               </div>
               <div className="p-4 bg-black rounded-2xl border border-zinc-800">
-                <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Vencimiento</p>
-                <p className="text-sm font-black text-white uppercase">{customer?.expiration_date}</p>
+                <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-1">Vencimiento</p>
+                <p className="text-base font-black text-white uppercase">{customer?.end_date}</p>
               </div>
             </div>
           </div>
@@ -105,10 +168,16 @@ export function CustomerDetails({ customerId, onBack }: CustomerDetailsProps) {
         {/* Historial de Pagos */}
         <div className="lg:col-span-2">
           <div className="bg-zinc-900 rounded-[2.5rem] border border-zinc-800 overflow-hidden shadow-2xl">
-            <div className="px-8 py-6 border-b border-zinc-800 flex justify-between items-center bg-black">
+            <div className="px-8 py-6 border-b border-zinc-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-black">
               <h3 className="font-black text-white uppercase tracking-tighter flex items-center gap-2 italic">
                 <CreditCard size={18} className="text-orange-500" /> Historial de Pagos
               </h3>
+              <button 
+                onClick={generateMemberPDF} 
+                className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-orange-700 shadow-lg shadow-orange-600/20 transition-all border-b-2 border-orange-700"
+              >
+                <Download size={14} /> Exportar Historial (PDF)
+              </button>
             </div>
 
             <div className="overflow-x-auto">
@@ -118,7 +187,9 @@ export function CustomerDetails({ customerId, onBack }: CustomerDetailsProps) {
                     <th className="px-8 py-4">Fecha</th>
                     <th className="px-8 py-4">Método</th>
                     <th className="px-8 py-4">Referencia</th>
-                    <th className="px-8 py-4 text-right">Monto</th>
+                    <th className="px-8 py-4 text-right">Monto en Dólares</th>
+                    <th className="px-8 py-4 text-right">Tasa BCV</th>
+                    <th className="px-8 py-4 text-right">Monto en Bolívares</th>
                     <th className="px-8 py-4 text-center">Comprobante</th>
                   </tr>
                 </thead>
@@ -135,6 +206,8 @@ export function CustomerDetails({ customerId, onBack }: CustomerDetailsProps) {
                       </td>
                       <td className="px-8 py-4 font-mono text-[10px] text-zinc-500">{p.reference_number || '---'}</td>
                       <td className="px-8 py-4 text-right font-black text-emerald-500 text-sm">${Number(p.amount).toFixed(2)}</td>
+                      <td className="px-8 py-4 text-right font-black text-zinc-400 text-sm">{p.bcv_rate ? `Bs. ${Number(p.bcv_rate).toFixed(2)}` : '---'}</td>
+                      <td className="px-8 py-4 text-right font-black text-zinc-300 text-sm">{p.amount_bs ? `Bs. ${Number(p.amount_bs).toFixed(2)}` : '---'}</td>
                       <td className="px-8 py-4 text-center relative">
                         {p.payment_image_url ? (
                           <div className="flex justify-center">
