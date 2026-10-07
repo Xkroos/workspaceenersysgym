@@ -6,8 +6,9 @@ import {
     CheckCircle2, AlertCircle, X, Loader2,
     Star, DollarSign, CreditCard, Hash
 } from 'lucide-react';
-import { addDays, format } from 'date-fns';
+import { addDays, addMonths, format } from 'date-fns';
 import { ImageUpload } from './ImageUpload';
+import { useExchangeRate } from '../hooks/useExchangeRate';
 
 interface Plan {
     id: string;
@@ -54,13 +55,14 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
     const isAlreadyPaid = initialData?.status === 'pagado';
     const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
 
-    const [bcvRate, setBcvRate] = useState<number>(0);
+    const { rate: bcvRate } = useExchangeRate();
     const [amountInBs, setAmountInBs] = useState<number>(0);
 
     useEffect(() => {
-        const floatAmount = Number(formData.price);
-        if (!isNaN(floatAmount) && bcvRate > 0) {
-            setAmountInBs(floatAmount * bcvRate);
+        const cleanPrice = typeof formData.price === 'string' ? formData.price.replace(',', '.') : formData.price;
+        const floatAmount = Number(cleanPrice);
+        if (!isNaN(floatAmount) && floatAmount > 0 && bcvRate > 0) {
+            setAmountInBs(Math.round(floatAmount * bcvRate * 100) / 100);
         } else {
             setAmountInBs(0);
         }
@@ -70,7 +72,6 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
         if (user?.id) {
             fetchPlans();
             fetchTrainers(); 
-            fetchBCVRate();
         } 
     }, [user?.id]);
 
@@ -78,7 +79,13 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
         if (formData.plan_id && formData.start_date && plans.length > 0) {
             const selectedPlan = plans.find(p => p.id === formData.plan_id);
             if (selectedPlan) {
-                const calculatedEnd = addDays(new Date(formData.start_date + 'T12:00:00'), selectedPlan.duration_days);
+                let calculatedEnd;
+                const months = Math.round(selectedPlan.duration_days / 30);
+                if (months >= 1 && selectedPlan.duration_days >= 28) {
+                    calculatedEnd = addMonths(new Date(formData.start_date + 'T12:00:00'), months);
+                } else {
+                    calculatedEnd = addDays(new Date(formData.start_date + 'T12:00:00'), selectedPlan.duration_days);
+                }
                 const newEndDate = format(calculatedEnd, 'yyyy-MM-dd');
                 if (newEndDate !== formData.end_date) {
                     setFormData(prev => ({ ...prev, end_date: newEndDate }));
@@ -87,17 +94,7 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
         }
     }, [formData.start_date, formData.plan_id, plans]);
 
-    const fetchBCVRate = async () => {
-        try {
-            const response = await fetch('https://ve.dolarapi.com/v1/dolares/oficial');
-            const data = await response.json();
-            if (data && data.promedio) {
-                setBcvRate(data.promedio);
-            }
-        } catch (err) {
-            console.error("Error obteniendo tasa de DolarAPI:", err);
-        }
-    };
+
 
     async function fetchPlans() {
         const { data } = await supabase.from('membership_types').select('*').eq('user_id', user?.id);
@@ -162,7 +159,13 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
     const handlePlanChange = (planId: string) => {
         const selectedPlan = plans.find(p => p.id === planId);
         if (selectedPlan) {
-            const calculatedEnd = addDays(new Date(formData.start_date + 'T12:00:00'), selectedPlan.duration_days);
+            let calculatedEnd;
+            const months = Math.round(selectedPlan.duration_days / 30);
+            if (months >= 1 && selectedPlan.duration_days >= 28) {
+                calculatedEnd = addMonths(new Date(formData.start_date + 'T12:00:00'), months);
+            } else {
+                calculatedEnd = addDays(new Date(formData.start_date + 'T12:00:00'), selectedPlan.duration_days);
+            }
             setFormData({
                 ...formData,
                 plan_id: planId,

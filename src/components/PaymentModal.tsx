@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { X, CheckCircle2, DollarSign, CreditCard, Hash, Loader2, RefreshCw } from 'lucide-react'; 
+import { X, CheckCircle2, DollarSign, CreditCard, Hash, Loader2, RefreshCw, Edit2, Check } from 'lucide-react'; 
 import { ImageUpload } from './ImageUpload'; 
+import { useExchangeRate } from '../hooks/useExchangeRate'; 
 
 interface PaymentModalProps {
     id: string;
@@ -11,6 +12,14 @@ interface PaymentModalProps {
     onClose: () => void;
     onSuccess: () => void;
 }
+
+// Función segura para parsear montos con punto o coma
+const parseSafeAmount = (val: string | number): number => {
+    if (!val) return 0;
+    const clean = val.toString().replace(',', '.').trim();
+    const parsed = parseFloat(clean);
+    return isNaN(parsed) ? 0 : parsed;
+};
 
 export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess }: PaymentModalProps) {
     const { user } = useAuth();
@@ -22,40 +31,33 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
     const [fetching, setFetching] = useState(true);
     const [loading, setLoading] = useState(false);
 
-    // --- ESTADOS PARA CÁLCULO BCV ---
-    const [bcvRate, setBcvRate] = useState<number>(0);
+    // --- CENTRALIZACIÓN BCV CON CACHÉ Y EDICIÓN MANUAL ---
+    const { rate: bcvRate, loading: loadingRate, refresh: fetchBCVRate, updateRate } = useExchangeRate();
     const [amountInBs, setAmountInBs] = useState<number>(0);
-    const [loadingRate, setLoadingRate] = useState(false);
+    const [isEditingRate, setIsEditingRate] = useState(false);
+    const [customRateInput, setCustomRateInput] = useState('');
 
     useEffect(() => {
         loadData();
-        fetchBCVRate(); // Carga la tasa al abrir el modal
     }, [id]);
 
-    // Calcular bolívares automáticamente cuando cambia el monto o la tasa
+    // Calcular bolívares automáticamente con redondeo exacto a 2 decimales comerciales
     useEffect(() => {
-        const floatAmount = parseFloat(amount);
-        if (!isNaN(floatAmount) && bcvRate > 0) {
-            setAmountInBs(floatAmount * bcvRate);
+        const floatAmount = parseSafeAmount(amount);
+        if (floatAmount > 0 && bcvRate > 0) {
+            // Redondeo estricto a 2 decimales para evitar 3 decimales o residuos flotantes
+            const totalBs = Math.round(floatAmount * bcvRate * 100) / 100;
+            setAmountInBs(totalBs);
         } else {
             setAmountInBs(0);
         }
     }, [amount, bcvRate]);
 
-    const fetchBCVRate = async () => {
-        setLoadingRate(true);
-        try {
-            const response = await fetch('https://ve.dolarapi.com/v1/dolares/oficial');
-            const data = await response.json();
-            
-            if (data && data.promedio) {
-                setBcvRate(data.promedio);
-            }
-        } catch (err) {
-            console.error("Error obteniendo tasa de DolarAPI:", err);
-            // Podrías setear una tasa por defecto aquí si la API falla
-        } finally {
-            setLoadingRate(false);
+    const handleSaveCustomRate = () => {
+        const parsed = parseSafeAmount(customRateInput);
+        if (parsed > 0) {
+            updateRate(parsed);
+            setIsEditingRate(false);
         }
     };
 
@@ -77,18 +79,20 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
 
     const handlePayment = async (e: React.FormEvent) => {
         e.preventDefault();
-        const floatAmount = parseFloat(amount);
+        const floatAmount = parseSafeAmount(amount);
         if (!user || isNaN(floatAmount) || floatAmount <= 0) return;
         
         if (!window.confirm(`¿Estás seguro que deseas registrar un pago por la cantidad de $${floatAmount}?`)) return;
 
         setLoading(true);
         try {
+            const finalAmountBs = Math.round(floatAmount * bcvRate * 100) / 100;
+
             const { error } = await supabase.from('payments').insert([{
                 membership_id: id,
                 user_id: user.id,
                 amount: floatAmount,
-                amount_bs: amountInBs,
+                amount_bs: finalAmountBs,
                 bcv_rate: bcvRate,
                 payment_method: method,
                 reference_number: reference,
@@ -144,28 +148,84 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
                                         <div className="space-y-1.5">
                                             <div className="flex justify-between items-center px-1">
                                                 <label className="text-xs font-black text-zinc-300 uppercase tracking-widest">Monto en Divisas</label>
-                                                <div className="flex items-center gap-1.5 bg-emerald-950/40 px-3 py-1 rounded-full border border-emerald-900/30">
-                                                    <span className="text-xs font-black text-emerald-400 uppercase">BCV: {bcvRate.toFixed(2)} Bs.</span>
-                                                    <button type="button" onClick={fetchBCVRate} className="text-emerald-400 hover:rotate-180 transition-all">
-                                                        <RefreshCw size={8} className={loadingRate ? 'animate-spin' : ''} />
-                                                    </button>
-                                                </div>
+                                                
+                                                {isEditingRate ? (
+                                                    <div className="flex items-center gap-1.5 bg-black px-2 py-1 rounded-xl border border-orange-500/50">
+                                                        <span className="text-[10px] font-black text-orange-400">Bs.</span>
+                                                        <input 
+                                                            type="text" 
+                                                            value={customRateInput} 
+                                                            onChange={e => setCustomRateInput(e.target.value)} 
+                                                            placeholder={bcvRate.toFixed(2)}
+                                                            className="w-16 bg-transparent text-xs font-black text-white outline-none"
+                                                            autoFocus
+                                                            onKeyDown={e => { if (e.key === 'Enter') handleSaveCustomRate(); }}
+                                                        />
+                                                        <button 
+                                                            type="button" 
+                                                            onClick={handleSaveCustomRate} 
+                                                            title="Guardar tasa personalizada"
+                                                            className="p-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-all"
+                                                        >
+                                                            <Check size={11} />
+                                                        </button>
+                                                        <button 
+                                                            type="button" 
+                                                            onClick={() => setIsEditingRate(false)} 
+                                                            title="Cancelar"
+                                                            className="p-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white rounded-lg transition-all"
+                                                        >
+                                                            <X size={11} />
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <div className="flex items-center gap-1.5 bg-emerald-950/40 px-3 py-1 rounded-full border border-emerald-900/30">
+                                                        <span className="text-xs font-black text-emerald-400 uppercase">
+                                                            BCV: {bcvRate.toFixed(2)} Bs.
+                                                        </span>
+                                                        <button 
+                                                            type="button" 
+                                                            onClick={() => {
+                                                                setCustomRateInput(bcvRate.toFixed(2));
+                                                                setIsEditingRate(true);
+                                                            }}
+                                                            title="Ajustar tasa manualmente si es necesario"
+                                                            className="text-zinc-400 hover:text-orange-400 transition-colors ml-0.5"
+                                                        >
+                                                            <Edit2 size={10} />
+                                                        </button>
+                                                        <button 
+                                                            type="button" 
+                                                            onClick={fetchBCVRate} 
+                                                            title="Actualizar tasa desde BCV"
+                                                            className="text-emerald-400 hover:rotate-180 transition-all ml-0.5"
+                                                        >
+                                                            <RefreshCw size={10} className={loadingRate ? 'animate-spin' : ''} />
+                                                        </button>
+                                                    </div>
+                                                )}
                                             </div>
                                             <div className="relative">
                                                 <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-emerald-400" size={16} />
                                                 <input 
-                                                    type="number" step="0.01" placeholder="0.00" required
+                                                    type="text"
+                                                    inputMode="decimal"
+                                                    placeholder="0.00" 
+                                                    required
                                                     className="w-full pl-10 pr-4 py-3 bg-black border border-zinc-800 rounded-xl font-black text-sm text-white outline-none focus:ring-4 focus:ring-orange-500/5 focus:border-orange-500 transition-all"
-                                                    value={amount} onChange={(e) => setAmount(e.target.value)}
+                                                    value={amount} 
+                                                    onChange={(e) => setAmount(e.target.value)}
                                                 />
                                             </div>
 
-                                            {/* VISUALIZACIÓN EN TIEMPO REAL BOLÍVARES */}
+                                            {/* VISUALIZACIÓN EN TIEMPO REAL BOLÍVARES (ESTRICTAMENTE 2 DECIMALES) */}
                                             {amountInBs > 0 && (
                                                 <div className="px-4 py-3 bg-zinc-950 rounded-xl border border-zinc-800/60 animate-in slide-in-from-top-1">
-                                                    <p className="text-xs font-black text-orange-500 flex justify-between">
+                                                    <p className="text-xs font-black text-orange-500 flex justify-between items-center">
                                                         <span className="text-zinc-300">Monto en Bolívares:</span>
-                                                        <span className="text-sm">{amountInBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs.</span>
+                                                        <span className="text-sm font-black tracking-tight text-white">
+                                                            {amountInBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
+                                                        </span>
                                                     </p>
                                                 </div>
                                             )}

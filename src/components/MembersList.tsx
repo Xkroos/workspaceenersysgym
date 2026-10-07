@@ -1,16 +1,20 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { useDebounce } from '../hooks/useDebounce';
 import { 
     Search, Loader2, DollarSign, Trash2, 
     CheckCircle2, UserX, Edit3, X, AlertCircle,
-    UserCheck, UserMinus, RefreshCw, Star, ChevronDown, Users
+    UserCheck, UserMinus, RefreshCw, Star, ChevronDown, Users,
+    ChevronLeft, ChevronRight
 } from 'lucide-react';
 
 // Componentes locales
 import { PaymentModal } from './PaymentModal';
 import MembershipForm from './MembershipForm';
 import { RenewalModal } from './RenewalModal';
+
+const PAGE_SIZE = 15; // 15 usuarios por página
 
 export function MembersList({ refresh }: { refresh: boolean }) {
     const { user } = useAuth();
@@ -19,7 +23,9 @@ export function MembersList({ refresh }: { refresh: boolean }) {
     const [members, setMembers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
-    const [activeTab, setActiveTab] = useState<'activo' | 'inactivo' | 'entrenador' | 'todos'>('activo');
+    const debouncedSearch = useDebounce(search, 200);
+    const [activeTab, setActiveTab] = useState<'activo' | 'inactivo' | 'deudor' | 'entrenador' | 'todos'>('activo');
+    const [currentPage, setCurrentPage] = useState(1);
     
     // Estados para el Menú Desplegable de Entrenadores
     const [showTrainerMenu, setShowTrainerMenu] = useState(false);
@@ -30,11 +36,17 @@ export function MembersList({ refresh }: { refresh: boolean }) {
     const [editTarget, setEditTarget] = useState<any>(null);
     const [renewalTarget, setRenewalTarget] = useState<any>(null);
 
+    // Reset de página cuando cambia el filtro o la búsqueda
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [debouncedSearch, activeTab, selectedTrainer]);
+
     const fetchMembers = async () => {
         if (!user) return;
         setLoading(true);
         
         try {
+            // Consulta en paralelo
             const [membersRes, paymentsRes] = await Promise.all([
                 supabase
                     .from('memberships')
@@ -49,14 +61,29 @@ export function MembersList({ refresh }: { refresh: boolean }) {
 
             if (membersRes.error) throw membersRes.error;
 
-            const processed = membersRes.data.map(member => {
-                const memberPayments = paymentsRes.data?.filter(p => {
-                    const isSameMember = p.membership_id === member.id;
-                    const isRecentPayment = new Date(p.created_at) >= new Date(member.created_at);
-                    return isSameMember && isRecentPayment;
-                }) || [];
+            // OPTIMIZACIÓN O(N + M): Pre-indexar timestamps de miembros y pagos por membership_id
+            const memberCreatedAtMap = new Map<string, number>();
+            (membersRes.data || []).forEach(m => {
+                memberCreatedAtMap.set(m.id, new Date(m.created_at).getTime());
+            });
 
-                const totalPaid = memberPayments.reduce((sum, p) => sum + Number(p.amount), 0);
+            const paymentsByMember = new Map<string, number>();
+            if (paymentsRes.data) {
+                for (let i = 0; i < paymentsRes.data.length; i++) {
+                    const p = paymentsRes.data[i];
+                    const memberCreatedTime = memberCreatedAtMap.get(p.membership_id);
+                    if (memberCreatedTime !== undefined) {
+                        const pTime = new Date(p.created_at).getTime();
+                        if (pTime >= memberCreatedTime) {
+                            const current = paymentsByMember.get(p.membership_id) || 0;
+                            paymentsByMember.set(p.membership_id, current + Number(p.amount || 0));
+                        }
+                    }
+                }
+            }
+
+            const processed = (membersRes.data || []).map(member => {
+                const totalPaid = paymentsByMember.get(member.id) || 0;
                 const planPrice = Number(member.price || 0);
                 const remaining = planPrice - totalPaid;
 
@@ -110,6 +137,10 @@ export function MembersList({ refresh }: { refresh: boolean }) {
         }
     };
 
+    const debtorsCount = useMemo(() => {
+        return members.filter(m => m.remaining > 0).length;
+    }, [members]);
+
     const trainersList = useMemo(() => {
         const list = members
             .map(m => m.trainer_name)
@@ -118,20 +149,33 @@ export function MembersList({ refresh }: { refresh: boolean }) {
     }, [members]);
 
     const filteredMembers = useMemo(() => {
+        const term = debouncedSearch.trim().toLowerCase();
         return members.filter(m => {
-            const matchesSearch = m.customer_name?.toLowerCase().includes(search.toLowerCase()) || 
-                                 m.cedula?.includes(search);
+            const matchesSearch = !term || 
+                                 m.customer_name?.toLowerCase().includes(term) || 
+                                 m.cedula?.includes(term);
             
             if (activeTab === 'entrenador') {
                 const matchesSpecificTrainer = selectedTrainer ? m.trainer_name === selectedTrainer : true;
                 return matchesSearch && matchesSpecificTrainer;
             }
 
+            if (activeTab === 'deudor') {
+                return matchesSearch && m.remaining > 0;
+            }
+
             if (activeTab === 'todos') return matchesSearch;
 
             return matchesSearch && m.status_member === activeTab && m.role !== 'entrenador';
         });
-    }, [search, members, activeTab, selectedTrainer]);
+    }, [debouncedSearch, members, activeTab, selectedTrainer]);
+
+    // Paginación eficiente para mantener el DOM fluido
+    const totalPages = Math.max(1, Math.ceil(filteredMembers.length / PAGE_SIZE));
+    const paginatedMembers = useMemo(() => {
+        const startIdx = (currentPage - 1) * PAGE_SIZE;
+        return filteredMembers.slice(startIdx, startIdx + PAGE_SIZE);
+    }, [filteredMembers, currentPage]);
 
     if (loading) return (
         <div className="flex flex-col items-center justify-center py-20 text-zinc-500">
@@ -158,10 +202,16 @@ export function MembersList({ refresh }: { refresh: boolean }) {
                         <UserMinus size={16} /> Inactivos
                     </button>
                     <button 
+                        onClick={() => { setActiveTab('deudor'); setSelectedTrainer(null); }}
+                        className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'deudor' ? 'bg-zinc-900 text-amber-500 border border-zinc-800 shadow-lg shadow-amber-500/5' : 'text-zinc-500 hover:text-zinc-400'}`}
+                    >
+                        <AlertCircle size={16} /> Deudores ({debtorsCount})
+                    </button>
+                    <button 
                         onClick={() => { setActiveTab('todos'); setSelectedTrainer(null); }}
                         className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'todos' ? 'bg-zinc-900 text-zinc-100 border border-zinc-800 shadow-lg' : 'text-zinc-500 hover:text-zinc-400'}`}
                     >
-                        <Users size={16} /> Todos
+                        <Users size={16} /> Todos ({members.length})
                     </button>
                 </div>
 
@@ -205,16 +255,24 @@ export function MembersList({ refresh }: { refresh: boolean }) {
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-600 group-focus-within:text-orange-500 transition-colors" size={18} />
                 <input 
                     type="text" 
-                    placeholder={`Buscar Miembro por nombre o cédula...`} 
+                    placeholder="Buscar Miembro por nombre o cédula..." 
                     className="w-full pl-12 pr-4 py-4 bg-zinc-900 border border-zinc-800 rounded-2xl outline-none focus:ring-4 focus:ring-orange-500/5 focus:border-orange-500 transition-all font-bold text-sm text-white shadow-inner placeholder-zinc-700"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                 />
             </div>
 
+            {/* RESUMEN DE REGISTROS */}
+            <div className="flex justify-between items-center px-2 text-xs font-black text-zinc-500 uppercase tracking-widest">
+                <span>Mostrando {filteredMembers.length > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0} - {Math.min(currentPage * PAGE_SIZE, filteredMembers.length)} de {filteredMembers.length} miembros</span>
+                {totalPages > 1 && (
+                    <span>Página {currentPage} de {totalPages}</span>
+                )}
+            </div>
+
             {/* TARJETAS DE Miembros */}
             <div className="grid grid-cols-1 gap-4">
-                {filteredMembers.length > 0 ? filteredMembers.map((m) => (
+                {paginatedMembers.length > 0 ? paginatedMembers.map((m) => (
                     <div key={m.id} className="bg-zinc-900 p-5 rounded-[2rem] border border-zinc-800/80 shadow-md hover:border-zinc-700 transition-all group animate-in fade-in slide-in-from-bottom-2">
                         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
                             
@@ -222,7 +280,11 @@ export function MembersList({ refresh }: { refresh: boolean }) {
                             <div className="flex items-center gap-4 min-w-[220px]">
                                 <div className="flex flex-col items-center gap-2">
                                     <div className="w-14 h-14 rounded-2xl bg-black border border-zinc-800 flex items-center justify-center text-orange-500 font-black text-xl overflow-hidden shadow-inner">
-                                        {m.photo_url ? <img src={m.photo_url} alt="" className="w-full h-full object-cover" /> : m.customer_name[0].toUpperCase()}
+                                        {m.photo_url ? (
+                                            <img src={m.photo_url} alt="" className="w-full h-full object-cover" loading="lazy" />
+                                        ) : (
+                                            m.customer_name?.[0]?.toUpperCase() || 'M'
+                                        )}
                                     </div>
                                     <button 
                                         onClick={() => toggleStatus(m.id, m.status_member)}
@@ -292,6 +354,29 @@ export function MembersList({ refresh }: { refresh: boolean }) {
                     </div>
                 )}
             </div>
+
+            {/* CONTROLES DE PAGINACIÓN */}
+            {totalPages > 1 && (
+                <div className="flex justify-between items-center p-4 bg-zinc-900 border border-zinc-800 rounded-2xl">
+                    <button
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="flex items-center gap-2 px-4 py-2 bg-black border border-zinc-800 rounded-xl text-xs font-black uppercase tracking-widest text-zinc-300 hover:text-white hover:bg-zinc-800 transition-all disabled:opacity-30 disabled:hover:bg-black"
+                    >
+                        <ChevronLeft size={16} /> Anterior
+                    </button>
+                    <span className="text-xs font-black text-orange-500 tracking-wider">
+                        Página {currentPage} de {totalPages}
+                    </span>
+                    <button
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        className="flex items-center gap-2 px-4 py-2 bg-black border border-zinc-800 rounded-xl text-xs font-black uppercase tracking-widest text-zinc-300 hover:text-white hover:bg-zinc-800 transition-all disabled:opacity-30 disabled:hover:bg-black"
+                    >
+                        Siguiente <ChevronRight size={16} />
+                    </button>
+                </div>
+            )}
 
             {/* MODALES CON BACKDROP MEJORADO */}
             {paymentTarget && <PaymentModal id={paymentTarget.id} orderTotal={paymentTarget.display_price} customerName={paymentTarget.customer_name} onClose={() => setPaymentTarget(null)} onSuccess={() => { setPaymentTarget(null); fetchMembers(); }} />}

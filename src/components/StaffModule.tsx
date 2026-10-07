@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { 
@@ -87,6 +87,18 @@ export function StaffModule() {
     await loadData();
   };
 
+  // Pre-agrupar alumnos por entrenador para búsqueda O(1) instantánea
+  const alumniByTrainer = useMemo(() => {
+    const map = new Map<string, any[]>();
+    allMembers.forEach(m => {
+      if (!m.trainer_name) return;
+      const list = map.get(m.trainer_name) || [];
+      list.push(m);
+      map.set(m.trainer_name, list);
+    });
+    return map;
+  }, [allMembers]);
+
   return (
     <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in duration-500">
       {/* Header */}
@@ -135,8 +147,7 @@ export function StaffModule() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {staff.map((trainer) => {
-            // Filtrar alumnos de este entrenador específico
-            const alumni = allMembers.filter(m => m.trainer_name === trainer.full_name);
+            const alumni = alumniByTrainer.get(trainer.full_name) || [];
             
             return (
               <div key={trainer.id} className={`relative bg-zinc-900 border rounded-[2.5rem] p-5 shadow-xl transition-all ${trainer.status === 'inactivo' ? 'opacity-50 grayscale border-zinc-800' : 'border-zinc-800 hover:border-orange-500'}`}>

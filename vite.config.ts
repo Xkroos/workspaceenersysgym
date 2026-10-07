@@ -4,19 +4,42 @@ import react from '@vitejs/plugin-react';
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  optimizeDeps: {
-    exclude: ['lucide-react'],
+  build: {
+    target: 'esnext',
+    cssCodeSplit: true,
+    chunkSizeWarningLimit: 800,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router-dom')) {
+              return 'vendor-react';
+            }
+            if (id.includes('@supabase')) {
+              return 'vendor-supabase';
+            }
+            if (id.includes('jspdf') || id.includes('html2canvas') || id.includes('purify')) {
+              return 'vendor-pdf';
+            }
+            if (id.includes('date-fns')) {
+              return 'vendor-date';
+            }
+            if (id.includes('lucide-react')) {
+              return 'vendor-icons';
+            }
+            return 'vendor-misc';
+          }
+        }
+      }
+    }
   },
-  // ⚙️ INICIO DE LA CONFIGURACIÓN DEL PROXY PARA CORS
   server: {
     proxy: {
-      // Cuando la aplicación llame a '/api/', el proxy redirigirá a la API externa
       '/api': { 
         target: 'https://pydolarve.org',
-        changeOrigin: true, // Importante: simula que la solicitud viene del target
-        rewrite: (path) => path.replace(/^\/api/, '') // Elimina el prefijo '/api' antes de enviarlo
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, '')
       }
     }
   }
-  // ⚙️ FIN DE LA CONFIGURACIÓN DEL PROXY
 });

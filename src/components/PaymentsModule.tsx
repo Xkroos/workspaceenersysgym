@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
+import { useDebounce } from '../hooks/useDebounce';
 import { 
   Search, 
   User, 
@@ -10,39 +11,50 @@ import {
   Activity,
   X,
   Phone,
-  Fingerprint
+  Fingerprint,
+  ChevronLeft
 } from 'lucide-react';
 import { format, addDays } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { CustomerDetails } from './CustomerDetails';
 
+const PAGE_SIZE = 18;
+
 export function PaymentsModule() {
     const [customers, setCustomers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+    const debouncedSearch = useDebounce(searchTerm, 200);
     const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
     const [inspectCustomer, setInspectCustomer] = useState<any | null>(null);
     const [allPayments, setAllPayments] = useState<any[]>([]);
+    const [currentPage, setCurrentPage] = useState(1);
 
     useEffect(() => {
         fetchCustomers();
     }, []);
 
+    // Resetear a la página 1 cuando cambia la búsqueda
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [debouncedSearch]);
+
     const fetchCustomers = async () => {
         setLoading(true);
         try {
-            const { data: memData, error: memErr } = await supabase
-                .from('memberships')
-                .select('*')
-                .order('customer_name', { ascending: true });
+            const [memRes, payRes] = await Promise.all([
+                supabase
+                    .from('memberships')
+                    .select('*')
+                    .order('customer_name', { ascending: true }),
+                supabase
+                    .from('payments')
+                    .select('membership_id, reference_number')
+            ]);
 
-            if (memErr) throw memErr;
-            setCustomers(memData || []);
-
-            const { data: payData } = await supabase
-                .from('payments')
-                .select('membership_id, reference_number');
-            if (payData) setAllPayments(payData);
+            if (memRes.error) throw memRes.error;
+            setCustomers(memRes.data || []);
+            setAllPayments(payRes.data || []);
         } catch (err) {
             console.error("Error cargando Miembro:", err);
         } finally {
@@ -50,34 +62,51 @@ export function PaymentsModule() {
         }
     };
 
-    // Función auxiliar para calcular o formatear el vencimiento en tiempo real
+    // Función auxiliar para formatear el vencimiento en tiempo real
     const getExpirationDate = (customer: any) => {
-        // 1. Si ya existe una fecha de vencimiento explícita en la base de datos, la usamos
         if (customer.end_date) {
-            // Añadimos T12:00:00 para evitar problemas de zona horaria al formatear
             return format(new Date(customer.end_date + 'T12:00:00'), "dd MMM, yyyy", { locale: es });
         }
-        
-        // 2. Si no existe, la calculamos sumando 30 días a la fecha de registro (created_at)
         if (customer.created_at) {
             const registrationDate = new Date(customer.created_at);
-            const calculatedExpiration = addDays(registrationDate, 30); // Cambia 30 por los días de tus planes si varía
+            const calculatedExpiration = addDays(registrationDate, 30);
             return format(calculatedExpiration, "dd MMM, yyyy", { locale: es });
         }
-
         return 'No registrada';
     };
 
-    const filteredCustomers = customers.filter(c => {
-        const term = searchTerm.toLowerCase();
-        const matchesName = c.customer_name?.toLowerCase().includes(term);
-        const matchesRef = allPayments.some(p => 
-            p.membership_id === c.id && 
-            p.reference_number && 
-            p.reference_number.toLowerCase().includes(term)
-        );
-        return matchesName || matchesRef;
-    });
+    // Pre-indexar referencias de pago en un Map para búsqueda instantánea O(1)
+    const referencesByMember = useMemo(() => {
+        const map = new Map<string, string[]>();
+        allPayments.forEach(p => {
+            if (!p.reference_number || !p.membership_id) return;
+            const list = map.get(p.membership_id) || [];
+            list.push(p.reference_number.toLowerCase());
+            map.set(p.membership_id, list);
+        });
+        return map;
+    }, [allPayments]);
+
+    // Filtrado memoizado y reactivo
+    const filteredCustomers = useMemo(() => {
+        const term = debouncedSearch.trim().toLowerCase();
+        if (!term) return customers;
+
+        return customers.filter(c => {
+            const matchesName = c.customer_name?.toLowerCase().includes(term);
+            if (matchesName) return true;
+
+            const refs = referencesByMember.get(c.id);
+            return refs ? refs.some(ref => ref.includes(term)) : false;
+        });
+    }, [customers, debouncedSearch, referencesByMember]);
+
+    // Paginación eficiente
+    const totalPages = Math.max(1, Math.ceil(filteredCustomers.length / PAGE_SIZE));
+    const paginatedCustomers = useMemo(() => {
+        const start = (currentPage - 1) * PAGE_SIZE;
+        return filteredCustomers.slice(start, start + PAGE_SIZE);
+    }, [filteredCustomers, currentPage]);
 
     if (selectedCustomerId) {
         return <CustomerDetails customerId={selectedCustomerId} onBack={() => setSelectedCustomerId(null)} />;
@@ -92,7 +121,7 @@ export function PaymentsModule() {
                         Gestión de Pagos
                     </h1>
                     <p className="text-zinc-500 font-bold text-[10px] uppercase tracking-[0.2em] mt-1">
-                        Selecciona un Miembro para gestionar su cuenta
+                        Selecciona un Miembro para gestionar su cuenta ({filteredCustomers.length} encontrados)
                     </p>
                 </div>
                 
@@ -116,7 +145,7 @@ export function PaymentsModule() {
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {filteredCustomers.map((customer) => (
+                    {paginatedCustomers.map((customer) => (
                         <div 
                             key={customer.id} 
                             className="bg-zinc-900 rounded-[2.5rem] p-6 border border-zinc-800 shadow-xl hover:border-orange-500 transition-all group"
@@ -139,7 +168,6 @@ export function PaymentsModule() {
                             <div className="space-y-2 pt-4 border-t border-zinc-800">
                                 <div className="flex items-center justify-between text-xs font-bold text-zinc-400 uppercase italic">
                                     <span className="flex items-center gap-1"><Calendar size={14}/> Vence:</span>
-                                    {/* AQUÍ SE EJECUTA EL CÁLCULO EN TIEMPO REAL */}
                                     <span className="text-zinc-100 font-black uppercase tracking-tight text-sm">
                                         {getExpirationDate(customer)}
                                     </span>
@@ -150,18 +178,19 @@ export function PaymentsModule() {
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-1 gap-2 mt-6">
-                                <button 
-                                    onClick={() => setSelectedCustomerId(customer.id)}
-                                    className="flex items-center justify-center gap-2 py-3 bg-black text-white border border-zinc-800/80 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-orange-600 hover:border-orange-600 transition-all"
-                                >
-                                    <CreditCard size={14} /> Historial de Pagos
-                                </button>
+                            <div className="grid grid-cols-2 gap-3 mt-6">
                                 <button 
                                     onClick={() => setInspectCustomer(customer)}
-                                    className="flex items-center justify-center gap-2 py-3 bg-zinc-950 text-zinc-300 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-zinc-800 transition-all"
+                                    className="py-3 bg-black hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all border border-zinc-800 flex items-center justify-center gap-1"
                                 >
-                                    Ver Datos del Miembro <ChevronRight size={14} />
+                                    Ver Ficha
+                                </button>
+                                
+                                <button 
+                                    onClick={() => setSelectedCustomerId(customer.id)}
+                                    className="py-3 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all border-b-2 border-orange-800 flex items-center justify-center gap-1 shadow-lg shadow-orange-600/10"
+                                >
+                                    <CreditCard size={14} /> Pagos
                                 </button>
                             </div>
                         </div>
@@ -169,39 +198,44 @@ export function PaymentsModule() {
                 </div>
             )}
 
-            {/* MODAL EMERGENTE: DATOS DEL Miembro */}
-            {inspectCustomer && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
-                    <div 
-                        className="bg-zinc-900 w-full max-w-md rounded-[3rem] shadow-2xl overflow-hidden border border-zinc-800 animate-in zoom-in-95 duration-300"
-                        onClick={(e) => e.stopPropagation()}
+            {/* Paginación */}
+            {totalPages > 1 && !loading && (
+                <div className="flex justify-between items-center p-4 bg-zinc-900 border border-zinc-800 rounded-2xl">
+                    <button
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="flex items-center gap-2 px-4 py-2 bg-black border border-zinc-800 rounded-xl text-xs font-black uppercase tracking-widest text-zinc-300 hover:text-white hover:bg-zinc-800 transition-all disabled:opacity-30 disabled:hover:bg-black"
                     >
-                        {/* Cabecera Modal */}
-                        <div className="relative p-8 bg-black/40 border-b border-zinc-800">
-                            <button 
-                                onClick={() => setInspectCustomer(null)}
-                                className="absolute right-6 top-6 p-2 bg-zinc-900 rounded-full text-zinc-500 hover:text-red-500 transition-all"
-                            >
-                                <X size={18} />
-                            </button>
-                            
-                            <div className="flex flex-col items-center">
-                                <div className="w-20 h-20 bg-orange-600 rounded-[1.5rem] flex items-center justify-center text-white mb-4 shadow-xl shadow-orange-600/20">
-                                    <User size={32} />
-                                </div>
-                                <h2 className="text-xl font-black text-zinc-100 uppercase tracking-tighter text-center">
-                                    Información del Miembro
-                                </h2>
-                                <span className={`mt-2 px-4 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${inspectCustomer.status_member === 'activo' ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-900/40' : 'bg-red-950/50 text-red-400 border border-red-900/40'}`}>
-                                    {inspectCustomer.status_member}
-                                </span>
+                        <ChevronLeft size={16} /> Anterior
+                    </button>
+                    <span className="text-xs font-black text-orange-500 tracking-wider">
+                        Página {currentPage} de {totalPages}
+                    </span>
+                    <button
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        className="flex items-center gap-2 px-4 py-2 bg-black border border-zinc-800 rounded-xl text-xs font-black uppercase tracking-widest text-zinc-300 hover:text-white hover:bg-zinc-800 transition-all disabled:opacity-30 disabled:hover:bg-black"
+                    >
+                        Siguiente <ChevronRight size={16} />
+                    </button>
+                </div>
+            )}
+
+            {/* Modal de Ficha */}
+            {inspectCustomer && (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-[100] animate-in fade-in">
+                    <div className="bg-zinc-900 text-white rounded-[2.5rem] shadow-2xl w-full max-w-md border border-zinc-800 overflow-hidden">
+                        <div className="px-8 py-5 border-b border-zinc-800 flex justify-between items-center bg-black/40">
+                            <div>
+                                <h2 className="font-black text-zinc-100 uppercase tracking-tighter text-lg">Ficha del Miembro</h2>
+                                <p className="text-[10px] font-bold text-orange-500 uppercase tracking-widest italic">Datos Registrados</p>
                             </div>
+                            <button onClick={() => setInspectCustomer(null)} className="p-2 hover:bg-zinc-800 rounded-xl text-zinc-400 hover:text-white transition-all"><X size={20}/></button>
                         </div>
 
                         {/* Cuerpo Modal */}
                         <div className="p-8 space-y-4">
                             <div className="space-y-4">
-                                {/* Campo: Nombre */}
                                 <div className="flex items-center gap-4 p-4 bg-black rounded-2xl border border-zinc-800/80">
                                     <User className="text-orange-500" size={20} />
                                     <div>
@@ -210,7 +244,6 @@ export function PaymentsModule() {
                                     </div>
                                 </div>
 
-                                {/* Campo: Cédula */}
                                 <div className="flex items-center gap-4 p-4 bg-black rounded-2xl border border-zinc-800/80">
                                     <Fingerprint className="text-orange-500" size={20} />
                                     <div>
@@ -219,7 +252,6 @@ export function PaymentsModule() {
                                     </div>
                                 </div>
 
-                                {/* Campo: Teléfono */}
                                 <div className="flex items-center gap-4 p-4 bg-black rounded-2xl border border-zinc-800/80">
                                     <Phone className="text-orange-500" size={20} />
                                     <div>
@@ -228,7 +260,6 @@ export function PaymentsModule() {
                                     </div>
                                 </div>
 
-                                {/* Campo: Plan */}
                                 <div className="flex items-center gap-4 p-4 bg-orange-950/20 rounded-2xl border border-orange-900/30">
                                     <Activity className="text-orange-500" size={20} />
                                     <div>

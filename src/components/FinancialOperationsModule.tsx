@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { DollarSign, TrendingUp, Zap, Clock, Loader2, Download, Filter, Search, Plus, X } from 'lucide-react';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import { DollarSign, TrendingUp, Zap, Clock, Loader2, Download, Filter, Search, Plus, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { exportFinancialReportPDF } from '../lib/pdfExport';
+
+const MOVEMENTS_PAGE_SIZE = 5;
 
 // Interfaces para tipado de datos con propiedades temporales de Supabase incluidas
 interface MembershipWithPayments {
@@ -28,6 +29,7 @@ export function FinancialOperationsModule() {
     const [customEndDate, setCustomEndDate] = useState('');
     const [filterMethod, setFilterMethod] = useState('Todos');
     const [filterMember, setFilterMember] = useState('');
+    const [movementsPage, setMovementsPage] = useState(1);
     
     // Estados para Modal de Operación
     const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
@@ -168,6 +170,18 @@ export function FinancialOperationsModule() {
         return filtered;
     }, [transactions, filterPeriod, customStartDate, customEndDate]);
 
+    // Resetear página de movimientos al cambiar filtros
+    useEffect(() => {
+        setMovementsPage(1);
+    }, [filterPeriod, customStartDate, customEndDate, filterMember]);
+
+    // Paginación a 5 registros por página para movimientos
+    const totalMovementPages = Math.max(1, Math.ceil(filteredTransactions.length / MOVEMENTS_PAGE_SIZE));
+    const paginatedTransactions = useMemo(() => {
+        const start = (movementsPage - 1) * MOVEMENTS_PAGE_SIZE;
+        return filteredTransactions.slice(start, start + MOVEMENTS_PAGE_SIZE);
+    }, [filteredTransactions, movementsPage]);
+
     // Cálculos de estadísticas filtradas
     const periodPaid = useMemo(() => filteredPayments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0), [filteredPayments]);
     const periodPaidBs = useMemo(() => filteredPayments.reduce((acc, p) => acc + (Number(p.amount_bs) || 0), 0), [filteredPayments]);
@@ -190,102 +204,33 @@ export function FinancialOperationsModule() {
             }, { totalPending: 0 });
     }, [memberships, filterMember]);
 
-    // --- GENERACIÓN DE PDF CON FILTRADO ACTUAL ---
-    const generatePDF = () => {
-        const doc = new jsPDF();
-        const now = new Date();
-        const dateStr = now.toLocaleDateString();
-        const titlePeriod = filterPeriod === 'Personalizado' ? `${customStartDate} al ${customEndDate}` : filterPeriod.toUpperCase();
+    const [generatingPdf, setGeneratingPdf] = useState(false);
 
-        // Título y Estilo del Reporte
-        doc.setFontSize(20);
-        doc.setTextColor(249, 115, 22); // Orange 500
-        doc.text('ENERGYM FITNESS CENTER', 14, 20);
-        
-        doc.setFontSize(12);
-        doc.setTextColor(30, 30, 36);
-        doc.text(`REPORTE FINANCIERO: ${titlePeriod}`, 14, 30);
-        doc.setFontSize(10);
-        doc.text(`Fecha de emisión: ${dateStr}`, 14, 37);
-
-        // Tabla 1: Resumen General del Período
-        autoTable(doc, {
-            startY: 45,
-            head: [[`Indicador`, 'Monto']],
-            body: [
-                ['Ingresos en Período (Cobrados USD)', `$${periodPaid.toLocaleString()}`],
-                ['Ingresos en Período (Cobrados Bs)', `Bs. ${periodPaidBs.toLocaleString()}`],
-                ['Ingresos Manuales (Capital)', `$${periodIngresoManual.toLocaleString()}`],
-                ['Cuentas por Cobrar (Global)', `$${stats.totalPending.toLocaleString()}`],
-                ['Inversiones en Período', `$${periodInvested.toLocaleString()}`],
-                ['Gastos/Retiros en Período', `$${periodWithdrawn.toLocaleString()}`],
-                ['SALDO NETO EN PERÍODO', `$${periodNetCashFlow.toLocaleString()}`],
-            ],
-            theme: 'grid',
-            headStyles: { fillColor: [249, 115, 22], halign: 'center' }, 
-            styles: { fontSize: 10, cellPadding: 5 },
-            columnStyles: { 1: { halign: 'right', fontStyle: 'bold' } }
-        });
-
-        // Tabla 2: Detalle de Movimientos del Período
-        doc.setFontSize(12);
-        let currentY = (doc as any).lastAutoTable.finalY + 15;
-        doc.text(`MOVIMIENTOS MANUALES (${filteredTransactions.length})`, 14, currentY);
-
-        const detailRows = filteredTransactions.map(t => [
-            new Date(t.transaction_date).toLocaleDateString(),
-            t.description,
-            t.type.toUpperCase(),
-            `$${Number(t.amount).toLocaleString()}`
-        ]);
-
-        autoTable(doc, {
-            startY: currentY + 5,
-            head: [['Fecha', 'Descripción', 'Categoría', 'Monto']],
-            body: detailRows,
-            theme: 'striped',
-            headStyles: { fillColor: [39, 39, 42] }, 
-            styles: { fontSize: 9 },
-            columnStyles: { 3: { halign: 'right' } }
-        });
-
-        // Tabla 3: Detalle de Ingresos (Pagos de Miembros)
-        currentY = (doc as any).lastAutoTable.finalY + 15;
-        doc.text(`DETALLE DE INGRESOS - PAGOS DE MIEMBROS (${filteredPayments.length})`, 14, currentY);
-
-        const paymentRows = filteredPayments.map(p => [
-            new Date(p.created_at || p.payment_date).toLocaleDateString(),
-            p.customer_name || 'Desconocido',
-            p.payment_method || 'N/A',
-            `$${Number(p.amount || 0).toLocaleString()}`,
-            `Bs. ${Number(p.amount_bs || 0).toLocaleString()}`
-        ]);
-
-        paymentRows.push([
-            'TOTALES',
-            '',
-            '',
-            `$${periodPaid.toLocaleString()}`,
-            `Bs. ${periodPaidBs.toLocaleString()}`
-        ]);
-
-        autoTable(doc, {
-            startY: currentY + 5,
-            head: [['Fecha', 'Cliente (Origen)', 'Método', 'Monto (USD)', 'Monto (Bs)']],
-            body: paymentRows,
-            theme: 'striped',
-            headStyles: { fillColor: [16, 185, 129] }, 
-            styles: { fontSize: 8 },
-            columnStyles: { 3: { halign: 'right' }, 4: { halign: 'right' } },
-            didParseCell: function(data) {
-                if (data.row.index === paymentRows.length - 1) {
-                    data.cell.styles.fontStyle = 'bold';
-                    data.cell.styles.textColor = [16, 185, 129];
-                }
-            }
-        });
-
-        doc.save(`Reporte_Financiero_Energym_${dateStr}.pdf`);
+    // --- GENERACIÓN DE PDF CON FILTRADO ACTUAL (Carga diferida bajo demanda) ---
+    const generatePDF = async () => {
+        if (generatingPdf) return;
+        try {
+            setGeneratingPdf(true);
+            await exportFinancialReportPDF({
+                filterPeriod,
+                customStartDate,
+                customEndDate,
+                periodPaid,
+                periodPaidBs,
+                periodIngresoManual,
+                totalPending: stats.totalPending,
+                periodInvested,
+                periodWithdrawn,
+                periodNetCashFlow,
+                filteredTransactions,
+                filteredPayments
+            });
+        } catch (err) {
+            console.error("Error generando PDF:", err);
+            alert("Error al generar el reporte financiero en PDF.");
+        } finally {
+            setGeneratingPdf(false);
+        }
     };
 
     const handleTransaction = async (e: React.FormEvent) => {
@@ -351,8 +296,13 @@ export function FinancialOperationsModule() {
                     <button onClick={() => setIsTransactionModalOpen(true)} className="flex-1 md:flex-none flex justify-center items-center gap-2 px-6 py-3 bg-emerald-600 text-white rounded-xl text-xs font-black uppercase tracking-wider hover:bg-emerald-700 shadow-lg shadow-emerald-600/20 transition-all border-b-2 border-emerald-800">
                         <Plus size={16} /> Nueva Operación
                     </button>
-                    <button onClick={generatePDF} className="flex-1 md:flex-none flex justify-center items-center gap-2 px-6 py-3 bg-orange-600 text-white rounded-xl text-xs font-black uppercase tracking-wider hover:bg-orange-700 shadow-lg shadow-orange-600/20 transition-all border-b-2 border-orange-800">
-                        <Download size={16} /> Exportar PDF
+                    <button 
+                        onClick={generatePDF} 
+                        disabled={generatingPdf}
+                        className="flex-1 md:flex-none flex justify-center items-center gap-2 px-6 py-3 bg-orange-600 text-white rounded-xl text-xs font-black uppercase tracking-wider hover:bg-orange-700 shadow-lg shadow-orange-600/20 transition-all border-b-2 border-orange-800 disabled:opacity-50"
+                    >
+                        <Download size={16} className={generatingPdf ? "animate-bounce" : ""} /> 
+                        {generatingPdf ? "Generando PDF..." : "Exportar PDF"}
                     </button>
                 </div>
             </div>
@@ -463,12 +413,15 @@ export function FinancialOperationsModule() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 bg-zinc-900 border border-zinc-800 rounded-[2.5rem] shadow-2xl overflow-hidden">
-                    <div className="p-5 bg-black border-b border-zinc-800">
+                    <div className="p-5 bg-black border-b border-zinc-800 flex justify-between items-center">
                         <h3 className="font-black text-white text-xs uppercase tracking-widest flex items-center gap-2 italic">
                             <Clock className="w-4 h-4 text-orange-500" /> Historial de Movimientos
                         </h3>
+                        <span className="text-[10px] font-black text-orange-400 bg-orange-950/40 border border-orange-900/50 px-3 py-1 rounded-full uppercase tracking-widest">
+                            {filteredTransactions.length} Movimientos (5 por pág)
+                        </span>
                     </div>
-                    <div className="overflow-x-auto max-h-[350px]">
+                    <div className="overflow-x-auto">
                         <table className="w-full text-sm text-left">
                             <thead className="bg-zinc-950 text-zinc-500 border-b border-zinc-800 sticky top-0 z-0">
                                 <tr className="text-[10px] font-black uppercase tracking-wider">
@@ -478,7 +431,7 @@ export function FinancialOperationsModule() {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-zinc-800/60">
-                                {filteredTransactions.map(t => (
+                                {paginatedTransactions.map(t => (
                                     <tr key={t.id} className="hover:bg-zinc-950/40 transition-colors">
                                         <td className="p-4 pl-8">
                                             <p className="font-bold text-zinc-200">{t.description}</p>
@@ -494,8 +447,41 @@ export function FinancialOperationsModule() {
                                         </td>
                                     </tr>
                                 ))}
+                                {paginatedTransactions.length === 0 && (
+                                    <tr>
+                                        <td colSpan={3} className="p-8 text-center text-zinc-500 font-bold text-xs uppercase tracking-widest">
+                                            No hay movimientos registrados en este período.
+                                        </td>
+                                    </tr>
+                                )}
                             </tbody>
                         </table>
+                    </div>
+
+                    {/* Controles de paginación para movimientos (5 por página) */}
+                    <div className="p-3 bg-black border-t border-zinc-800 flex justify-between items-center text-xs font-black">
+                        <span className="text-[10px] text-zinc-500 uppercase tracking-widest pl-4">
+                            {filteredTransactions.length > 0 ? (movementsPage - 1) * MOVEMENTS_PAGE_SIZE + 1 : 0} - {Math.min(movementsPage * MOVEMENTS_PAGE_SIZE, filteredTransactions.length)} de {filteredTransactions.length}
+                        </span>
+                        <div className="flex items-center gap-2 pr-4">
+                            <button
+                                onClick={() => setMovementsPage(p => Math.max(1, p - 1))}
+                                disabled={movementsPage === 1}
+                                className="p-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg border border-zinc-800 transition-all disabled:opacity-30 disabled:hover:bg-zinc-900"
+                            >
+                                <ChevronLeft size={16} />
+                            </button>
+                            <span className="text-[10px] px-2.5 py-1 bg-zinc-950 border border-zinc-800 rounded-lg text-orange-500">
+                                {movementsPage} / {totalMovementPages}
+                            </span>
+                            <button
+                                onClick={() => setMovementsPage(p => Math.min(totalMovementPages, p + 1))}
+                                disabled={movementsPage === totalMovementPages}
+                                className="p-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg border border-zinc-800 transition-all disabled:opacity-30 disabled:hover:bg-zinc-900"
+                            >
+                                <ChevronRight size={16} />
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -526,61 +512,6 @@ export function FinancialOperationsModule() {
                             </div>
                         ))}
                     </div>
-                </div>
-            </div>
-
-            {/* HISTORIAL DE PAGOS DE CLIENTES */}
-            <div className="bg-zinc-900 border border-zinc-800 rounded-[2.5rem] shadow-2xl overflow-hidden mt-6">
-                <div className="p-5 bg-black border-b border-zinc-800 flex justify-between items-center">
-                    <h3 className="font-black text-white text-xs uppercase tracking-widest flex items-center gap-2 italic">
-                        <DollarSign className="w-4 h-4 text-emerald-500" /> Historial de Pagos de Clientes
-                    </h3>
-                    <span className="text-[10px] font-black text-emerald-500 bg-emerald-500/10 px-3 py-1 rounded-full uppercase tracking-widest">
-                        {filteredPayments.length} Pagos
-                    </span>
-                </div>
-                <div className="overflow-x-auto max-h-[400px]">
-                    <table className="w-full text-sm text-left">
-                        <thead className="bg-zinc-950 text-zinc-500 border-b border-zinc-800 sticky top-0 z-0">
-                            <tr className="text-[10px] font-black uppercase tracking-wider">
-                                <th className="p-4 pl-8">Cliente (Origen)</th>
-                                <th className="p-4 text-center">Método</th>
-                                <th className="p-4 text-right">Monto (USD)</th>
-                                <th className="p-4 text-right">Monto (Bs)</th>
-                                <th className="p-4 pr-8 text-center">Fecha</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-zinc-800/60">
-                            {filteredPayments.map((p, idx) => (
-                                <tr key={p.id || idx} className="hover:bg-zinc-950/40 transition-colors">
-                                    <td className="p-4 pl-8">
-                                        <p className="font-bold text-zinc-200">{p.customer_name || 'Desconocido'}</p>
-                                    </td>
-                                    <td className="p-4 text-center">
-                                        <span className="text-[8px] px-2 py-0.5 rounded font-black uppercase tracking-wide border bg-zinc-800 text-zinc-400 border-zinc-700">
-                                            {p.payment_method || 'N/A'}
-                                        </span>
-                                    </td>
-                                    <td className="p-4 text-right font-black text-base text-emerald-500">
-                                        ${Number(p.amount || 0).toLocaleString()}
-                                    </td>
-                                    <td className="p-4 text-right font-black text-sm text-zinc-400">
-                                        Bs. {Number(p.amount_bs || 0).toLocaleString()}
-                                    </td>
-                                    <td className="p-4 pr-8 text-center text-zinc-500 text-[10px] font-bold">
-                                        {new Date(p.created_at || p.payment_date).toLocaleDateString()}
-                                    </td>
-                                </tr>
-                            ))}
-                            {filteredPayments.length === 0 && (
-                                <tr>
-                                    <td colSpan={5} className="p-8 text-center text-zinc-500 font-bold text-xs uppercase tracking-widest">
-                                        No hay pagos registrados en este período.
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
                 </div>
             </div>
 

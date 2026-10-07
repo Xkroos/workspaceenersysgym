@@ -12,8 +12,7 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import { exportCustomerHistoryPDF } from '../lib/pdfExport';
 
 interface CustomerDetailsProps {
   customerId: string;
@@ -26,6 +25,7 @@ export function CustomerDetails({ customerId, onBack }: CustomerDetailsProps) {
   const [loading, setLoading] = useState(true);
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [generatingPdf, setGeneratingPdf] = useState(false);
 
   useEffect(() => {
     fetchFullData();
@@ -63,65 +63,17 @@ export function CustomerDetails({ customerId, onBack }: CustomerDetailsProps) {
     }
   };
 
-  const generateMemberPDF = () => {
-    if (!customer) return;
-    
-    const doc = new jsPDF();
-    const dateStr = new Date().toLocaleDateString();
-
-    doc.setFontSize(20);
-    doc.setTextColor(249, 115, 22);
-    doc.text('ENERGYM FITNESS CENTER', 14, 20);
-    
-    doc.setFontSize(12);
-    doc.setTextColor(30, 30, 36);
-    doc.text(`HISTORIAL DE PAGOS: ${customer.customer_name.toUpperCase()}`, 14, 30);
-    doc.setFontSize(10);
-    doc.text(`Fecha de emisión: ${dateStr}`, 14, 37);
-
-    let totalUSD = 0;
-    let totalBs = 0;
-
-    const tableRows = payments.map(p => {
-      const pUSD = Number(p.amount) || 0;
-      const pBs = Number(p.amount_bs) || 0;
-      totalUSD += pUSD;
-      totalBs += pBs;
-
-      return [
-        format(new Date(p.created_at), "dd/MM/yyyy", { locale: es }),
-        p.payment_method || 'N/A',
-        p.reference_number || '---',
-        `$${pUSD.toLocaleString()}`,
-        `Bs. ${pBs.toLocaleString()}`
-      ];
-    });
-
-    tableRows.push([
-      'TOTALES',
-      '',
-      '',
-      `$${totalUSD.toLocaleString()}`,
-      `Bs. ${totalBs.toLocaleString()}`
-    ]);
-
-    autoTable(doc, {
-      startY: 45,
-      head: [['Fecha', 'Método', 'Referencia', 'Monto (USD)', 'Monto (Bs)']],
-      body: tableRows,
-      theme: 'striped',
-      headStyles: { fillColor: [249, 115, 22] },
-      styles: { fontSize: 9 },
-      columnStyles: { 3: { halign: 'right' }, 4: { halign: 'right' } },
-      didParseCell: function(data) {
-        if (data.row.index === tableRows.length - 1) {
-          data.cell.styles.fontStyle = 'bold';
-          data.cell.styles.textColor = [249, 115, 22];
-        }
-      }
-    });
-
-    doc.save(`Historial_${customer.customer_name.replace(/\s+/g, '_')}_${dateStr}.pdf`);
+  const generateMemberPDF = async () => {
+    if (!customer || generatingPdf) return;
+    try {
+      setGeneratingPdf(true);
+      await exportCustomerHistoryPDF(customer, payments);
+    } catch (err) {
+      console.error("Error al exportar PDF:", err);
+      alert("Error al generar el archivo PDF.");
+    } finally {
+      setGeneratingPdf(false);
+    }
   };
 
   if (loading) return (
@@ -174,9 +126,11 @@ export function CustomerDetails({ customerId, onBack }: CustomerDetailsProps) {
               </h3>
               <button 
                 onClick={generateMemberPDF} 
-                className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-orange-700 shadow-lg shadow-orange-600/20 transition-all border-b-2 border-orange-700"
+                disabled={generatingPdf}
+                className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-orange-700 shadow-lg shadow-orange-600/20 transition-all border-b-2 border-orange-700 disabled:opacity-50"
               >
-                <Download size={14} /> Exportar Historial (PDF)
+                <Download size={14} className={generatingPdf ? "animate-bounce" : ""} /> 
+                {generatingPdf ? "Generando PDF..." : "Exportar Historial (PDF)"}
               </button>
             </div>
 

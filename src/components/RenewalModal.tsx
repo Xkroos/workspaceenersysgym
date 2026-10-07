@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { X, Check, Loader2, AlertTriangle, History, RefreshCw } from 'lucide-react';
+import { addDays, addMonths, format } from 'date-fns';
 
 interface RenewalModalProps {
     member: any;
@@ -54,13 +55,26 @@ export function RenewalModal({ member, onClose, onSuccess }: RenewalModalProps) 
         const now = new Date().toISOString();
 
         try {
+            // Calcular nueva fecha de vencimiento
+            const startDateStr = format(new Date(), 'yyyy-MM-dd');
+            let calculatedEnd;
+            const months = Math.round(selectedPlan.duration_days / 30);
+            if (months >= 1 && selectedPlan.duration_days >= 28) {
+                calculatedEnd = addMonths(new Date(startDateStr + 'T12:00:00'), months);
+            } else {
+                calculatedEnd = addDays(new Date(startDateStr + 'T12:00:00'), selectedPlan.duration_days);
+            }
+            const endDateStr = format(calculatedEnd, 'yyyy-MM-dd');
+
             // A. Actualizar la membresía (Nuevo plan y reinicio de fecha para limpiar abonos en la lista)
             const { error: updateError } = await supabase
                 .from('memberships')
                 .update({
                     plan_name: selectedPlan.name,
                     price: selectedPlan.price,
-                    created_at: now 
+                    created_at: now,
+                    start_date: startDateStr,
+                    end_date: endDateStr
                 })
                 .eq('id', member.id);
 
