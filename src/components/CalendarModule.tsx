@@ -1,18 +1,21 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import {
     Calendar as CalendarIcon, X, ChevronLeft, ChevronRight,
     MessageCircle, Save, CheckCircle2,
-    AlertCircle, Clock, DollarSign, User, Phone, RefreshCw, Info
+    AlertCircle, Clock, DollarSign, User, Phone, RefreshCw, Info,
+    Search
 } from 'lucide-react';
 import { format, startOfDay } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { PaymentModal } from './PaymentModal';
+import { useDebounce } from '../hooks/useDebounce';
 
 interface Membership {
     id: string;
     customer_name: string;
+    cedula?: string;
     phone?: string;
     plan_name?: string;
     type?: string;
@@ -29,6 +32,7 @@ export interface CalendarEvent {
     id: string;
     membership_id: string;
     customer_name: string;
+    cedula?: string;
     phone?: string;
     type: string;
     price: number;
@@ -52,21 +56,68 @@ interface DailyInfo {
 const DEFAULT_MSG_TODAY = 'Hola {nombre}, te saludamos de la administración de Energym Fitness Center 🏋️‍♂️💪. Te recordamos que hoy te toca cancelar tu mensualidad del plan {plan}. El monto pendiente es de ${monto}. ¡Te esperamos!';
 const DEFAULT_MSG_3DAYS = 'Hola {nombre}, te saludamos de la administración de Energym Fitness Center 🏋️‍♂️💪. Te recordamos que te faltan 3 días por cancelar tu membresía del plan {plan}. El monto será de ${monto}. ¡Te esperamos!';
 
-// Helper seguro para parsear fechas sin desfasajes de zona horaria
+// Helper robusto para parsear fechas sin desfasajes de zona horaria y soportando múltiples formatos
 function parseDateSafe(dateVal: string | null | undefined): Date | null {
     if (!dateVal) return null;
-    const clean = dateVal.split('T')[0].split(' ')[0].trim();
-    const parts = clean.split('-');
-    if (parts.length === 3) {
-        const y = parseInt(parts[0], 10);
-        const m = parseInt(parts[1], 10) - 1;
-        const d = parseInt(parts[2], 10);
-        if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
-            return new Date(y, m, d, 12, 0, 0);
+    const trimmed = String(dateVal).trim();
+    if (!trimmed) return null;
+
+    // Extraer solo la parte de la fecha (remover hora T... o espacio ...)
+    const clean = trimmed.split('T')[0].split(' ')[0].trim();
+
+    // Soporte para delimitadores '-' y '/'
+    const delimiter = clean.includes('-') ? '-' : clean.includes('/') ? '/' : null;
+    if (delimiter) {
+        const parts = clean.split(delimiter);
+        if (parts.length === 3) {
+            const p0 = parseInt(parts[0], 10);
+            const p1 = parseInt(parts[1], 10);
+            const p2 = parseInt(parts[2], 10);
+
+            // Formato estándar YYYY-MM-DD o YYYY/MM/DD
+            if (parts[0].length === 4 && !isNaN(p0) && !isNaN(p1) && !isNaN(p2)) {
+                return new Date(p0, p1 - 1, p2, 12, 0, 0);
+            }
+            // Formato latinoamericano DD-MM-YYYY o DD/MM/YYYY
+            if (parts[2].length === 4 && !isNaN(p0) && !isNaN(p1) && !isNaN(p2)) {
+                return new Date(p2, p1 - 1, p0, 12, 0, 0);
+            }
         }
     }
-    const parsed = new Date(dateVal);
+
+    const parsed = new Date(trimmed);
     return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+// Obtener el día de corte asegurando que ningún cliente registrado se pierda
+function getMemberCutOffDay(m: Membership, daysInMonth: number): number {
+    const candidates = [m.end_date, m.start_date, m.created_at];
+    for (const val of candidates) {
+        if (!val) continue;
+        const parsed = parseDateSafe(val);
+        if (parsed && !isNaN(parsed.getTime())) {
+            const day = parsed.getDate();
+            if (day >= 1 && day <= 31) {
+                return Math.min(day, daysInMonth);
+            }
+        }
+    }
+    // Fallback: Si no tiene fecha válida, ubicarlo en el día 1 o fecha actual del mes para no omitirlo
+    const fallbackDay = Math.min(new Date().getDate(), daysInMonth);
+    return Math.max(1, fallbackDay);
+}
+
+// Verifica si un miembro está marcado como Inactivo
+function isMemberInactive(m: Membership): boolean {
+    const statusMember = m.status_member ? String(m.status_member).trim().toLowerCase() : '';
+    const status = (m as any).status ? String((m as any).status).trim().toLowerCase() : '';
+    return statusMember === 'inactivo' || status === 'inactivo';
+}
+
+// Verifica si el registro pertenece a un rol de entrenador
+function isTrainerRole(m: Membership): boolean {
+    const role = (m as any).role ? String((m as any).role).trim().toLowerCase() : '';
+    return role === 'entrenador';
 }
 
 // Modal de Detalles del Día
@@ -181,6 +232,11 @@ const DayDetailsModal: React.FC<{
                                             </span>
                                             <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-bold flex-wrap">
                                                 <span>Plan: {event.type}</span>
+                                                {event.cedula && (
+                                                    <span className="text-zinc-400">
+                                                        • C.I: <span className="text-zinc-300 font-mono">{event.cedula}</span>
+                                                    </span>
+                                                )}
                                                 {event.phone && (
                                                     <span className="flex items-center gap-1 text-zinc-500">
                                                         <Phone size={10} className="text-zinc-400" /> {event.phone}
@@ -270,11 +326,18 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
     const [loading, setLoading] = useState(true);
     const [currentDate, setCurrentDate] = useState(new Date());
     const [selectedDayInfo, setSelectedDayInfo] = useState<DailyInfo | null>(null);
+    const [filterStatus, setFilterStatus] = useState<'all' | 'paid' | 'pending'>('all');
+
+    // Búsqueda de clientes por nombre o cédula
+    const [search, setSearch] = useState('');
+    const debouncedSearch = useDebounce(search, 200);
 
     const [msgToday, setMsgToday] = useState(DEFAULT_MSG_TODAY);
     const [msg3Days, setMsg3Days] = useState(DEFAULT_MSG_3DAYS);
     const [showSettings, setShowSettings] = useState(false);
     const [savingConfig, setSavingConfig] = useState(false);
+
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
 
     // Carga de membresías y pagos
     const loadData = useCallback(async () => {
@@ -317,6 +380,13 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
         loadData();
     }, [loadData]);
 
+    // Resetear el scroll al cambiar de mes
+    useEffect(() => {
+        if (scrollContainerRef.current) {
+            scrollContainerRef.current.scrollTop = 0;
+        }
+    }, [currentDate]);
+
     const handleSaveConfig = async () => {
         if (!user) return;
         setSavingConfig(true);
@@ -352,14 +422,30 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
         const end = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
         const days = [];
         const startIdx = start.getDay() === 0 ? 6 : start.getDay() - 1;
+
+        // Días de relleno del mes anterior
         for (let i = startIdx; i > 0; i--) {
-            days.push({ date: new Date(start.getFullYear(), start.getMonth(), 1 - i), isCurrent: false });
+            days.push({
+                date: new Date(start.getFullYear(), start.getMonth(), 1 - i),
+                isCurrent: false
+            });
         }
+
+        // Días del mes en curso
         for (let i = 1; i <= end.getDate(); i++) {
-            days.push({ date: new Date(start.getFullYear(), start.getMonth(), i), isCurrent: true });
+            days.push({
+                date: new Date(start.getFullYear(), start.getMonth(), i),
+                isCurrent: true
+            });
         }
+
+        // Días de relleno del mes siguiente (garantizando 42 celdas exactas sin duplicar el mes actual)
+        let nextMonthDay = 1;
         while (days.length < 42) {
-            days.push({ date: new Date(end.getFullYear(), end.getMonth(), days.length - (end.getDate() + startIdx) + 1), isCurrent: false });
+            days.push({
+                date: new Date(start.getFullYear(), start.getMonth() + 1, nextMonthDay++),
+                isCurrent: false
+            });
         }
         return days;
     }, [currentDate]);
@@ -369,23 +455,33 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
         const acc: Record<string, DailyInfo> = {};
         const now = startOfDay(new Date());
 
-        // 1. Pre-indexación de pagos por membership_id
+        // 1. Pre-indexación de timestamps de membresías
         const memberCreatedAtMap = new Map<string, number>();
         memberships.forEach(m => {
-            memberCreatedAtMap.set(m.id, new Date(m.created_at).getTime());
+            if (m.created_at) {
+                const t = new Date(m.created_at).getTime();
+                if (!isNaN(t)) {
+                    memberCreatedAtMap.set(m.id, t);
+                }
+            }
         });
 
+        // 2. Pre-indexación de pagos por membership_id con tolerancia de reloj
         const paymentsByMember = new Map<string, number>();
-        if (payments) {
+        if (payments && payments.length > 0) {
             for (let i = 0; i < payments.length; i++) {
                 const p = payments[i];
+                if (!p.membership_id) continue;
                 const memTime = memberCreatedAtMap.get(p.membership_id);
                 if (memTime !== undefined) {
-                    const pTime = new Date(p.created_at).getTime();
-                    if (pTime >= memTime) {
+                    const pTime = p.created_at ? new Date(p.created_at).getTime() : NaN;
+                    if (isNaN(pTime) || pTime >= memTime - 5000) {
                         const cur = paymentsByMember.get(p.membership_id) || 0;
                         paymentsByMember.set(p.membership_id, cur + Number(p.amount || 0));
                     }
+                } else {
+                    const cur = paymentsByMember.get(p.membership_id) || 0;
+                    paymentsByMember.set(p.membership_id, cur + Number(p.amount || 0));
                 }
             }
         }
@@ -394,21 +490,29 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
         const targetMonth = currentDate.getMonth();
         const daysInTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
 
-        // 2. Mapear cada membresía a su fecha en el calendario
+        // 3. Mapear cada cliente activo a su fecha de corte en el calendario
         memberships.forEach(m => {
-            const dateStr = m.end_date || m.start_date || m.created_at;
-            const dueDateParsed = parseDateSafe(dateStr);
-            if (!dueDateParsed) return;
+            // REQUISITO CRÍTICO 1: Las personas con status Inactivo NO deben aparecer en el calendario
+            if (isMemberInactive(m) || isTrainerRole(m)) {
+                return;
+            }
+
+            // REQUISITO CRÍTICO 2: Asegurar que TODOS los clientes registrados con estatus Pagado y Pendiente aparezcan
+            const cutOffDay = getMemberCutOffDay(m, daysInTargetMonth);
+            const scheduledDate = new Date(targetYear, targetMonth, cutOffDay, 12, 0, 0);
 
             const totalPaid = paymentsByMember.get(m.id) || 0;
             const price = Number(m.price || 0);
             const remaining = Math.max(0, price - totalPaid);
-            const isPaid = remaining <= 0 || m.status_member === 'pagado';
 
-            // Determinar el día del mes de corte
-            const cutOffDay = dueDateParsed.getDate();
-            const dayInCurrentMonth = Math.min(cutOffDay, daysInTargetMonth);
-            const scheduledDate = new Date(targetYear, targetMonth, dayInCurrentMonth, 12, 0, 0);
+            const statusMemberClean = m.status_member ? String(m.status_member).trim().toLowerCase() : '';
+            const statusClean = (m as any).status ? String((m as any).status).trim().toLowerCase() : '';
+
+            const isExplicitlyPaid = statusMemberClean === 'pagado' || statusClean === 'pagado';
+            const isExplicitlyPending = statusMemberClean === 'pendiente' || statusClean === 'pendiente';
+
+            // Un cliente se clasifica como Pagado si tiene estatus explícito pagado o si ha saldado el precio completo
+            const isPaid = isExplicitlyPaid || (remaining <= 0 && !isExplicitlyPending);
 
             const key = format(scheduledDate, 'yyyy-MM-dd');
             if (!acc[key]) {
@@ -423,6 +527,7 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
                 id: m.id,
                 membership_id: m.id,
                 customer_name: m.customer_name || 'Sin nombre',
+                cedula: m.cedula,
                 phone: m.phone,
                 type: m.plan_name || m.type || 'Membresía',
                 price,
@@ -449,7 +554,7 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
 
     const todayStr = format(new Date(), 'yyyy-MM-dd');
 
-    // Totales del mes visible
+    // Totales del mes visible (Solo clientes activos, Pagados y Pendientes)
     const monthStats = useMemo(() => {
         let totalEvents = 0;
         let totalPaidCount = 0;
@@ -466,12 +571,32 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
         return { totalEvents, totalPaidCount, totalPendingCount };
     }, [groupedEvents]);
 
+    // Conteo de resultados de búsqueda por nombre o cédula
+    const searchResultsCount = useMemo(() => {
+        const term = debouncedSearch.trim().toLowerCase();
+        if (!term) return null;
+        let count = 0;
+        Object.values(groupedEvents).forEach(day => {
+            day.events.forEach(e => {
+                const matchesSearch =
+                    e.customer_name?.toLowerCase().includes(term) ||
+                    Boolean(e.cedula && String(e.cedula).toLowerCase().includes(term));
+                const matchesStatus =
+                    filterStatus === 'all' ? true :
+                    filterStatus === 'paid' ? e.is_paid :
+                    !e.is_paid;
+                if (matchesSearch && matchesStatus) count++;
+            });
+        });
+        return count;
+    }, [groupedEvents, debouncedSearch, filterStatus]);
+
     return (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 md:p-6 pt-16 md:pt-20 pb-4 z-[100] animate-in fade-in">
-            <div className="bg-zinc-900 text-white rounded-[2.5rem] shadow-2xl w-full max-w-6xl max-h-[86vh] md:max-h-[85vh] flex flex-col overflow-hidden border border-zinc-800">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 md:p-6 pt-14 md:pt-16 pb-3 z-[100] animate-in fade-in">
+            <div className="bg-zinc-900 text-white rounded-[2.5rem] shadow-2xl w-full max-w-6xl h-[92vh] max-h-[92vh] flex flex-col overflow-hidden border border-zinc-800">
                 
                 {/* CABECERA */}
-                <div className="p-5 md:p-6 bg-black border-b border-zinc-800 flex flex-wrap justify-between items-center gap-3 shrink-0">
+                <div className="p-4 sm:p-5 bg-black border-b border-zinc-800 flex flex-wrap justify-between items-center gap-3 shrink-0">
                     <div className="flex items-center gap-3">
                         <div className="p-2.5 bg-orange-500/10 border border-orange-500/20 text-orange-500 rounded-2xl">
                             <CalendarIcon className="w-6 h-6" />
@@ -486,23 +611,50 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
                                 </span>
                             </div>
                             <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
-                                Fechas de corte y estados de solvencia mensual
+                                Fechas de corte y solvencia de clientes activos
                             </p>
                         </div>
                     </div>
 
-                    {/* Leyenda y Botones de Cabecera */}
+                    {/* Filtros de Estado y Botones de Cabecera */}
                     <div className="flex items-center gap-2 md:gap-3 flex-wrap">
-                        {/* Leyenda rápida */}
-                        <div className="hidden sm:flex items-center gap-3 px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-xl text-[10px] font-black uppercase tracking-wider">
-                            <span className="flex items-center gap-1.5 text-emerald-400">
+                        {/* Selector interactivo de filtro: Todos / Pago / Pendiente */}
+                        <div className="flex items-center gap-1 p-1 bg-zinc-950 border border-zinc-800 rounded-xl text-[10px] font-black uppercase tracking-wider">
+                            <button
+                                onClick={() => setFilterStatus('all')}
+                                title="Mostrar todos los clientes activos"
+                                className={`px-2.5 py-1.5 rounded-lg transition-all ${
+                                    filterStatus === 'all'
+                                        ? 'bg-zinc-800 text-white shadow-sm'
+                                        : 'text-zinc-400 hover:text-white'
+                                }`}
+                            >
+                                Todos ({monthStats.totalEvents})
+                            </button>
+                            <button
+                                onClick={() => setFilterStatus('paid')}
+                                title="Filtrar solo clientes con estatus Pagado"
+                                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all ${
+                                    filterStatus === 'paid'
+                                        ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-700/60 shadow-sm'
+                                        : 'text-emerald-400 hover:text-emerald-300'
+                                }`}
+                            >
                                 <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
                                 Pago ({monthStats.totalPaidCount})
-                            </span>
-                            <span className="flex items-center gap-1.5 text-red-400">
+                            </button>
+                            <button
+                                onClick={() => setFilterStatus('pending')}
+                                title="Filtrar solo clientes con estatus Pendiente"
+                                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all ${
+                                    filterStatus === 'pending'
+                                        ? 'bg-red-950/90 text-red-300 border border-red-700/60 shadow-sm'
+                                        : 'text-red-400 hover:text-red-300'
+                                }`}
+                            >
                                 <span className="w-2 h-2 rounded-full bg-red-500"></span>
                                 Pendiente ({monthStats.totalPendingCount})
-                            </span>
+                            </button>
                         </div>
 
                         <button
@@ -516,7 +668,7 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
 
                         <button
                             onClick={() => setShowSettings(!showSettings)}
-                            className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 text-xs font-black uppercase tracking-widest rounded-xl transition-all"
+                            className="px-3 sm:px-4 py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 text-xs font-black uppercase tracking-widest rounded-xl transition-all"
                         >
                             {showSettings ? 'Ver Calendario' : 'Plantillas WhatsApp'}
                         </button>
@@ -580,45 +732,84 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
                     </div>
                 ) : (
                     <>
-                        {/* BARRA DE NAVEGACIÓN ENTRE MESES */}
-                        <div className="p-3 md:px-6 bg-zinc-950 flex justify-between items-center border-b border-zinc-800 shrink-0">
-                            <button
-                                onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1))}
-                                className="p-2 hover:bg-zinc-900 text-zinc-400 hover:text-white rounded-xl transition-all border border-zinc-850"
-                                title="Mes anterior"
-                            >
-                                <ChevronLeft size={18} />
-                            </button>
-
-                            <div className="flex items-center gap-3">
-                                <span className="font-black uppercase text-white tracking-widest text-sm md:text-base italic">
-                                    {format(currentDate, 'MMMM yyyy', { locale: es })}
-                                </span>
+                        {/* BARRA DE NAVEGACIÓN ENTRE MESES Y BÚSQUEDA */}
+                        <div className="p-2 sm:px-6 bg-zinc-950 flex flex-wrap justify-between items-center gap-2.5 border-b border-zinc-800 shrink-0">
+                            {/* Navegación de Mes */}
+                            <div className="flex items-center gap-2 sm:gap-3">
                                 <button
-                                    onClick={() => setCurrentDate(new Date())}
-                                    className="px-2.5 py-1 text-[9px] font-black uppercase tracking-widest bg-zinc-900 text-orange-500 border border-zinc-800 rounded-lg hover:bg-zinc-800 transition-all"
+                                    onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1))}
+                                    className="p-2 hover:bg-zinc-900 text-zinc-400 hover:text-white rounded-xl transition-all border border-zinc-850"
+                                    title="Mes anterior"
                                 >
-                                    Hoy
+                                    <ChevronLeft size={18} />
+                                </button>
+
+                                <div className="flex items-center gap-2.5">
+                                    <span className="font-black uppercase text-white tracking-widest text-sm sm:text-base italic">
+                                        {format(currentDate, 'MMMM yyyy', { locale: es })}
+                                    </span>
+                                    <button
+                                        onClick={() => setCurrentDate(new Date())}
+                                        className="px-2.5 py-1 text-[9px] font-black uppercase tracking-widest bg-zinc-900 text-orange-500 border border-zinc-800 rounded-lg hover:bg-zinc-800 transition-all"
+                                    >
+                                        Hoy
+                                    </button>
+                                </div>
+
+                                <button
+                                    onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1))}
+                                    className="p-2 hover:bg-zinc-900 text-zinc-400 hover:text-white rounded-xl transition-all border border-zinc-850"
+                                    title="Mes siguiente"
+                                >
+                                    <ChevronRight size={18} />
                                 </button>
                             </div>
 
-                            <button
-                                onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1))}
-                                className="p-2 hover:bg-zinc-900 text-zinc-400 hover:text-white rounded-xl transition-all border border-zinc-850"
-                                title="Mes siguiente"
-                            >
-                                <ChevronRight size={18} />
-                            </button>
+                            {/* BARRA DE BÚSQUEDA POR NOMBRE O CÉDULA */}
+                            <div className="flex items-center gap-2 flex-1 sm:flex-initial w-full sm:w-auto justify-end">
+                                {searchResultsCount !== null && (
+                                    <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border whitespace-nowrap ${
+                                        searchResultsCount > 0
+                                            ? 'bg-orange-950/40 text-orange-400 border-orange-500/30'
+                                            : 'bg-zinc-900 text-zinc-500 border-zinc-800'
+                                    }`}>
+                                        {searchResultsCount} {searchResultsCount === 1 ? 'resultado' : 'resultados'}
+                                    </span>
+                                )}
+
+                                <div className="relative w-full sm:w-64 md:w-80 group">
+                                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500 group-focus-within:text-orange-500 transition-colors pointer-events-none" size={15} />
+                                    <input
+                                        type="text"
+                                        placeholder="Buscar por nombre o cédula..."
+                                        value={search}
+                                        onChange={(e) => setSearch(e.target.value)}
+                                        className="w-full pl-9 pr-8 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-xs font-bold text-white placeholder-zinc-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 transition-all shadow-inner"
+                                    />
+                                    {search && (
+                                        <button
+                                            onClick={() => setSearch('')}
+                                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white p-0.5 rounded-md hover:bg-zinc-800 transition-all cursor-pointer"
+                                            title="Limpiar búsqueda"
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
                         </div>
 
                         {/* CUADRÍCULA DEL CALENDARIO */}
-                        <div className="flex-1 overflow-y-auto p-2 md:p-4 bg-zinc-950 custom-scroll flex flex-col">
+                        <div 
+                            ref={scrollContainerRef}
+                            className="flex-1 overflow-y-auto p-2 sm:p-3 bg-zinc-950 custom-scroll flex flex-col min-h-0"
+                        >
                             {/* Días de la semana */}
-                            <div className="grid grid-cols-7 gap-1 md:gap-1.5 mb-1.5 shrink-0">
+                            <div className="grid grid-cols-7 gap-1 sm:gap-1.5 mb-1 shrink-0">
                                 {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
                                     <div
                                         key={d}
-                                        className="py-1.5 text-center text-[10px] font-black text-zinc-400 uppercase tracking-widest bg-black rounded-lg border border-zinc-800/80"
+                                        className="py-1 text-center text-[10px] font-black text-zinc-400 uppercase tracking-widest bg-black rounded-lg border border-zinc-800/80"
                                     >
                                         {d}
                                     </div>
@@ -626,44 +817,74 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
                             </div>
 
                             {/* Celdas de los días */}
-                            <div className="grid grid-cols-7 gap-1 md:gap-1.5 flex-1 min-h-[500px]">
+                            <div className="grid grid-cols-7 grid-rows-6 gap-1 sm:gap-1.5 flex-1 min-h-[460px]">
                                 {calendarDays.map((day, i) => {
                                     const key = format(day.date, 'yyyy-MM-dd');
                                     const data = groupedEvents[key];
                                     const isToday = key === todayStr;
-                                    const hasEvents = Boolean(data && data.events.length > 0);
+
+                                    const isSearchActive = Boolean(debouncedSearch.trim());
+                                    const term = debouncedSearch.trim().toLowerCase();
+
+                                    // Filtrar eventos visibles según filtro de estatus y término de búsqueda
+                                    const allDayEvents = (day.isCurrent && data ? data.events : []);
+                                    const visibleEvents = allDayEvents.filter(e => {
+                                        // Filtro de estatus (Todos / Pago / Pendiente)
+                                        if (filterStatus === 'paid' && !e.is_paid) return false;
+                                        if (filterStatus === 'pending' && e.is_paid) return false;
+
+                                        // Filtro por nombre o cédula
+                                        if (isSearchActive) {
+                                            const matchesName = e.customer_name?.toLowerCase().includes(term);
+                                            const matchesCedula = e.cedula && String(e.cedula).toLowerCase().includes(term);
+                                            if (!matchesName && !matchesCedula) return false;
+                                        }
+
+                                        return true;
+                                    });
+
+                                    const hasVisibleEvents = visibleEvents.length > 0;
+                                    const isHighlighted = isSearchActive && hasVisibleEvents;
 
                                     return (
                                         <div
                                             key={i}
-                                            onClick={() => data && data.events.length > 0 && setSelectedDayInfo(data)}
-                                            className={`min-h-[85px] md:min-h-[105px] p-1.5 md:p-2 transition-all relative rounded-2xl border flex flex-col ${
+                                            onClick={() => day.isCurrent && hasVisibleEvents && data && setSelectedDayInfo({ ...data, events: visibleEvents })}
+                                            className={`min-h-[64px] sm:min-h-[72px] md:min-h-0 p-1 sm:p-1.5 transition-all relative rounded-xl sm:rounded-2xl border flex flex-col ${
                                                 day.isCurrent
-                                                    ? 'bg-zinc-900/90 border-zinc-800/80'
-                                                    : 'opacity-35 bg-zinc-950 border-zinc-900/50'
+                                                    ? isHighlighted
+                                                        ? 'bg-orange-950/40 border-orange-500 ring-2 ring-orange-500/50 shadow-lg shadow-orange-500/20'
+                                                        : isSearchActive
+                                                        ? 'opacity-30 bg-zinc-950 border-zinc-900/60'
+                                                        : 'bg-zinc-900/90 border-zinc-800/80'
+                                                    : 'opacity-20 bg-zinc-950 border-zinc-900/40 pointer-events-none'
                                             } ${
-                                                hasEvents
+                                                day.isCurrent && hasVisibleEvents
                                                     ? 'cursor-pointer hover:border-zinc-650 hover:bg-zinc-850/90 shadow-sm'
                                                     : ''
                                             } ${
-                                                isToday
+                                                isToday && day.isCurrent && !isHighlighted
                                                     ? 'border-orange-500/90 shadow-lg shadow-orange-500/10 ring-1 ring-orange-500/50'
                                                     : ''
                                             }`}
                                         >
-                                            {/* Número de día */}
+                                            {/* Número de día y contador de eventos */}
                                             <div className="flex justify-between items-center mb-1">
-                                                {hasEvents ? (
-                                                    <span className="text-[8px] font-black text-zinc-500 uppercase px-1 rounded bg-black">
-                                                        {data.events.length}
+                                                {hasVisibleEvents ? (
+                                                    <span className={`text-[8px] font-black uppercase px-1.5 py-0.2 rounded-md border ${
+                                                        isHighlighted
+                                                            ? 'bg-orange-600 text-white border-orange-500'
+                                                            : 'bg-zinc-950 text-orange-400 border-zinc-800'
+                                                    }`}>
+                                                        {visibleEvents.length}
                                                     </span>
                                                 ) : <span />}
 
                                                 <span
                                                     className={`text-[10px] font-black rounded-full flex items-center justify-center ${
-                                                        isToday
+                                                        isToday && day.isCurrent
                                                             ? 'w-5 h-5 bg-orange-500 text-black shadow-sm font-black'
-                                                            : 'text-zinc-400'
+                                                            : day.isCurrent ? 'text-zinc-400' : 'text-zinc-600'
                                                     }`}
                                                 >
                                                     {day.date.getDate()}
@@ -671,12 +892,12 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
                                             </div>
 
                                             {/* CLIENTES EN EL CUADRO */}
-                                            {hasEvents && (
+                                            {hasVisibleEvents && (
                                                 <div className="flex-1 space-y-1 overflow-hidden flex flex-col justify-start">
-                                                    {data.events.slice(0, 3).map((event, idx) => (
+                                                    {visibleEvents.slice(0, 3).map((event, idx) => (
                                                         <div
                                                             key={idx}
-                                                            title={`${event.customer_name} - ${event.is_paid ? 'PAGO' : 'PENDIENTE'}`}
+                                                            title={`${event.customer_name}${event.cedula ? ` (C.I: ${event.cedula})` : ''} - ${event.is_paid ? 'PAGO' : 'PENDIENTE'}`}
                                                             className={`p-1 rounded-md text-[9px] font-black flex items-center justify-between gap-1 transition-all ${
                                                                 event.is_paid
                                                                     ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/30'
@@ -708,9 +929,9 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
                                                         </div>
                                                     ))}
 
-                                                    {data.events.length > 3 && (
+                                                    {visibleEvents.length > 3 && (
                                                         <div className="text-[8px] font-black text-center text-zinc-400 bg-zinc-800/70 rounded py-0.5 uppercase tracking-wider">
-                                                            +{data.events.length - 3} más
+                                                            +{visibleEvents.length - 3} más
                                                         </div>
                                                     )}
                                                 </div>

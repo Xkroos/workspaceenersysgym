@@ -43,8 +43,8 @@ export function InventoryModule() {
 
     // Estados para el formulario de nuevo artículo
     const [newItemName, setNewItemName] = useState('');
-    const [newItemPurchasePrice, setNewItemPurchasePrice] = useState(0);  
-    const [newItemSalePrice, setNewItemSalePrice] = useState(0);      
+    const [newItemPurchasePrice, setNewItemPurchasePrice] = useState(0);
+    const [newItemSalePrice, setNewItemSalePrice] = useState(0);
     const [newItemQuantity, setNewItemQuantity] = useState(0);
     const [newItemSku, setNewItemSku] = useState('');
 

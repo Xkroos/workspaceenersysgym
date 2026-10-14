@@ -7,11 +7,12 @@ import { supabase } from './lib/supabase';
 import {
     TrendingUp, BarChart3, Menu, X,
     Users, Settings, UserPlus, UserCheck, DollarSign,
-    Wallet, Bell, Calendar as CalendarIcon, Loader2
+    Wallet, Bell, Calendar as CalendarIcon, Loader2, LayoutDashboard
 } from 'lucide-react';
 
 // --- CARGA DIFERIDA (CODE SPLITTING) DE MÓDULOS ---
 // Permite que la app inicial cargue instantáneamente descargando los módulos bajo demanda
+const InteractiveDashboard = lazy(() => import('./components/InteractiveDashboard').then(m => ({ default: m.InteractiveDashboard })));
 const MembersList = lazy(() => import('./components/MembersList').then(m => ({ default: m.MembersList })));
 const MembershipForm = lazy(() => import('./components/MembershipForm'));
 const Ajustes = lazy(() => import('./components/Ajustes'));
@@ -60,7 +61,7 @@ const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 // --- DASHBOARD PRINCIPAL ---
 function Dashboard() {
     const { user, signOut } = useAuth();
-    const [activeTab, setActiveTab] = useState('members');
+    const [activeTab, setActiveTab] = useState('dashboard');
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [refreshTrigger, setRefreshTrigger] = useState(false);
@@ -190,6 +191,7 @@ function Dashboard() {
             <main className="flex flex-1 overflow-hidden relative">
                 {/* Menú Lateral */}
                 <aside className={`fixed inset-y-0 left-0 z-50 md:static md:w-64 w-64 bg-black p-4 flex flex-col space-y-1.5 transition-transform duration-300 border-r border-zinc-900 ${isMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+                    <SidebarItem active={activeTab === 'dashboard'} onClick={() => { setActiveTab('dashboard'); setIsMenuOpen(false); }} icon={<LayoutDashboard size={18} />} label="Dashboard" />
                     <SidebarItem active={activeTab === 'members'} onClick={() => { setActiveTab('members'); setIsMenuOpen(false); }} icon={<Users size={18} />} label="Registro" />
                     <SidebarItem active={activeTab === 'payments'} onClick={() => { setActiveTab('payments'); setIsMenuOpen(false); }} icon={<DollarSign size={18} />} label="Miembros y pagos" />
                     <SidebarItem active={activeTab === 'financial'} onClick={() => { setActiveTab('financial'); setIsMenuOpen(false); }} icon={<Wallet size={18} />} label="Finanzas" />
@@ -207,7 +209,18 @@ function Dashboard() {
                 <section className="flex-1 overflow-y-auto bg-zinc-950 custom-scroll">
                     <div className="p-4 md:p-8">
                         <Suspense fallback={<ModuleSkeleton />}>
-                            {activeTab === 'members' ? (
+                            {activeTab === 'dashboard' ? (
+                                <div className="max-w-7xl mx-auto">
+                                    <InteractiveDashboard
+                                        onOpenNewMember={() => setIsModalOpen(true)}
+                                        onOpenCalendar={() => setIsCalendarModalOpen(true)}
+                                        onOpenDebtors={() => setIsDebtorsModalOpen(true)}
+                                        onNavigate={(tab) => setActiveTab(tab)}
+                                        bcvRate={bcvRate}
+                                        onRefreshBcv={() => refreshBcvRate()}
+                                    />
+                                </div>
+                            ) : activeTab === 'members' ? (
                                 <div className="max-w-6xl mx-auto space-y-6">
                                     {/* Banner de Panel Central */}
                                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-gradient-to-r from-orange-600 to-orange-500 p-8 rounded-[2.5rem] shadow-2xl shadow-orange-600/10 text-white relative overflow-hidden border-b-4 border-orange-700">
@@ -222,22 +235,6 @@ function Dashboard() {
                                     </div>
 
                                     <MembersList refresh={refreshTrigger} />
-
-                                    {isModalOpen && (
-                                        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-                                            <div className="animate-in zoom-in-95 duration-300 w-full max-w-2xl">
-                                                <Suspense fallback={<div className="p-8 text-center"><Loader2 className="animate-spin text-orange-500 mx-auto" /></div>}>
-                                                    <MembershipForm
-                                                        onClose={() => setIsModalOpen(false)}
-                                                        onSuccess={() => {
-                                                            setIsModalOpen(false);
-                                                            setRefreshTrigger(!refreshTrigger);
-                                                        }}
-                                                    />
-                                                </Suspense>
-                                            </div>
-                                        </div>
-                                    )}
                                 </div>
                             ) : (
                                 <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-4">
@@ -253,6 +250,23 @@ function Dashboard() {
                 </section>
             </main>
             
+            {/* Modales Globales Accesibles desde Cualquier Módulo */}
+            {isModalOpen && (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+                    <div className="animate-in zoom-in-95 duration-300 w-full max-w-2xl">
+                        <Suspense fallback={<div className="p-8 text-center"><Loader2 className="animate-spin text-orange-500 mx-auto" /></div>}>
+                            <MembershipForm
+                                onClose={() => setIsModalOpen(false)}
+                                onSuccess={() => {
+                                    setIsModalOpen(false);
+                                    setRefreshTrigger(!refreshTrigger);
+                                }}
+                            />
+                        </Suspense>
+                    </div>
+                </div>
+            )}
+
             {isCalendarModalOpen && (
                 <Suspense fallback={<div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center"><Loader2 className="animate-spin text-orange-500" size={32} /></div>}>
                     <CalendarModule onClose={() => setIsCalendarModalOpen(false)} />

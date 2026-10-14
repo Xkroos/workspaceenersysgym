@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { 
@@ -27,13 +27,7 @@ export function StaffModule() {
     status: 'activo' as 'activo' | 'inactivo'
   });
 
-  useEffect(() => {
-    if (user) {
-      loadData();
-    }
-  }, [user]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user) return;
     setFetching(true);
     try {
@@ -48,11 +42,15 @@ export function StaffModule() {
       setStaff(staffRes.data || []);
       setAllMembers(membersRes.data || []);
     } catch (error) {
-      console.error('Error:', error);
+      console.error('Error cargando entrenadores:', error);
     } finally {
       setFetching(false);
     }
-  };
+  }, [user]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,6 +67,7 @@ export function StaffModule() {
       setShowForm(false);
       await loadData();
     } catch (error) {
+      console.error('Error al guardar entrenador:', error);
       alert('Error al guardar');
     } finally {
       setLoading(false);

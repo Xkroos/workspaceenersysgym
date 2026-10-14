@@ -111,8 +111,7 @@ export function FinancialOperationsModule() {
             case 'Mensual': now.setMonth(now.getMonth() - 1); return now;
             case 'Anual': now.setFullYear(now.getFullYear() - 1); return now;
             case 'Mes Actual': 
-                const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
-                return firstDay;
+                return new Date(now.getFullYear(), now.getMonth(), 1);
             default: return new Date(0);
         }
     };
