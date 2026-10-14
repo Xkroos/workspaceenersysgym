@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { X, CheckCircle2, DollarSign, CreditCard, Hash, Loader2, RefreshCw, Edit2, Check } from 'lucide-react'; 
 import { ImageUpload } from './ImageUpload'; 
+import { ErrorBoundary } from './ErrorBoundary';
 import { useExchangeRate } from '../hooks/useExchangeRate'; 
 
 interface PaymentModalProps {
@@ -261,7 +262,13 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
                                 <div className="space-y-2">
                                     <label className="text-xs font-black text-zinc-300 uppercase tracking-widest ml-1">Comprobante de Pago</label>
                                     <div className="bg-black rounded-2xl border-2 border-dashed border-zinc-800 p-2 min-h-[160px] flex items-center justify-center">
-                                        <ImageUpload onImageSelected={setImageData} disabled={loading} />
+                                        <ErrorBoundary fallback={
+                                            <div className="text-center p-4 text-xs text-zinc-500 font-bold">
+                                                No se pudo cargar el selector de imagen. Puedes continuar con el registro.
+                                            </div>
+                                        }>
+                                            <ImageUpload onImageSelected={setImageData} disabled={loading} />
+                                        </ErrorBoundary>
                                     </div>
                                 </div>
                             </div>
