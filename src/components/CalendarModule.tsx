@@ -268,7 +268,7 @@ const DayDetailsModal: React.FC<{
                                             {event.is_paid ? 'Monto Pagado' : 'Monto Pendiente'}
                                         </span>
                                         <span className={`text-base font-black ${event.is_paid ? 'text-emerald-400' : 'text-red-400'}`}>
-                                            ${event.is_paid ? event.price.toFixed(2) : (event.remaining || event.amount_due).toFixed(2)}
+                                            ${event.is_paid ? event.price.toFixed(2) : event.remaining.toFixed(2)}
                                         </span>
                                     </div>
 
@@ -475,7 +475,8 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
                 const memTime = memberCreatedAtMap.get(p.membership_id);
                 if (memTime !== undefined) {
                     const pTime = p.created_at ? new Date(p.created_at).getTime() : NaN;
-                    if (isNaN(pTime) || pTime >= memTime - 5000) {
+                    // Tolerancia de 60s por desfase de reloj entre cliente y servidor Supabase
+                    if (isNaN(pTime) || pTime >= memTime - 60000) {
                         const cur = paymentsByMember.get(p.membership_id) || 0;
                         paymentsByMember.set(p.membership_id, cur + Number(p.amount || 0));
                     }
@@ -509,10 +510,9 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
             const statusClean = (m as any).status ? String((m as any).status).trim().toLowerCase() : '';
 
             const isExplicitlyPaid = statusMemberClean === 'pagado' || statusClean === 'pagado';
-            const isExplicitlyPending = statusMemberClean === 'pendiente' || statusClean === 'pendiente';
 
-            // Un cliente se clasifica como Pagado si tiene estatus explícito pagado o si ha saldado el precio completo
-            const isPaid = isExplicitlyPaid || (remaining <= 0 && !isExplicitlyPending);
+            // ALINEACIÓN TOTAL CON REGISTRO: Si el saldo pendiente es 0 (o menor), el miembro está AL DÍA / PAGO
+            const isPaid = remaining <= 0 || isExplicitlyPaid;
 
             const key = format(scheduledDate, 'yyyy-MM-dd');
             if (!acc[key]) {
@@ -531,8 +531,8 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
                 phone: m.phone,
                 type: m.plan_name || m.type || 'Membresía',
                 price,
-                amount_due: remaining > 0 ? remaining : price,
-                remaining,
+                amount_due: isPaid ? 0 : remaining,
+                remaining: isPaid ? 0 : remaining,
                 total_paid: totalPaid,
                 is_paid: isPaid,
                 is_overdue: isOverdue,
@@ -545,7 +545,7 @@ export const CalendarModule: React.FC<{ onClose?: () => void }> = ({ onClose }) 
             if (isPaid) {
                 acc[key].totalPaidToday += price;
             } else {
-                acc[key].totalDueToday += (remaining > 0 ? remaining : price);
+                acc[key].totalDueToday += remaining;
             }
         });
 
