@@ -1,8 +1,9 @@
-import { useState, createContext, useEffect, lazy, Suspense } from 'react';
+import { useState, createContext, useEffect, Suspense } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Login } from './components/Login';
 import { useExchangeRate } from './hooks/useExchangeRate';
 import { supabase } from './lib/supabase';
+import { lazyWithRetry } from './lib/lazyWithRetry';
 
 import {
     TrendingUp, BarChart3, Menu, X,
@@ -10,18 +11,17 @@ import {
     Wallet, Bell, Calendar as CalendarIcon, Loader2, LayoutDashboard
 } from 'lucide-react';
 
-// --- CARGA DIFERIDA (CODE SPLITTING) DE MÓDULOS ---
-// Permite que la app inicial cargue instantáneamente descargando los módulos bajo demanda
-const InteractiveDashboard = lazy(() => import('./components/InteractiveDashboard').then(m => ({ default: m.InteractiveDashboard })));
-const MembersList = lazy(() => import('./components/MembersList').then(m => ({ default: m.MembersList })));
-const MembershipForm = lazy(() => import('./components/MembershipForm'));
-const Ajustes = lazy(() => import('./components/Ajustes'));
-const StatisticsModule = lazy(() => import('./components/StatisticsModule').then(m => ({ default: m.StatisticsModule })));
-const StaffModule = lazy(() => import('./components/StaffModule').then(m => ({ default: m.StaffModule })));
-const PaymentsModule = lazy(() => import('./components/PaymentsModule').then(m => ({ default: m.PaymentsModule })));
-const FinancialOperationsModule = lazy(() => import('./components/FinancialOperationsModule').then(m => ({ default: m.FinancialOperationsModule })));
-const CalendarModule = lazy(() => import('./components/CalendarModule').then(m => ({ default: m.CalendarModule })));
-const DebtorsNotificationModal = lazy(() => import('./components/DebtorsNotificationModal').then(m => ({ default: m.DebtorsNotificationModal })));
+// --- CARGA DIFERIDA CON AUTO-REINTENTO (RESISTENTE A DESPLIEGUES EN NETLIFY) ---
+const InteractiveDashboard = lazyWithRetry(() => import('./components/InteractiveDashboard').then(m => ({ default: m.InteractiveDashboard })));
+const MembersList = lazyWithRetry(() => import('./components/MembersList').then(m => ({ default: m.MembersList })));
+const MembershipForm = lazyWithRetry(() => import('./components/MembershipForm'));
+const Ajustes = lazyWithRetry(() => import('./components/Ajustes'));
+const StatisticsModule = lazyWithRetry(() => import('./components/StatisticsModule').then(m => ({ default: m.StatisticsModule })));
+const StaffModule = lazyWithRetry(() => import('./components/StaffModule').then(m => ({ default: m.StaffModule })));
+const PaymentsModule = lazyWithRetry(() => import('./components/PaymentsModule').then(m => ({ default: m.PaymentsModule })));
+const FinancialOperationsModule = lazyWithRetry(() => import('./components/FinancialOperationsModule').then(m => ({ default: m.FinancialOperationsModule })));
+const CalendarModule = lazyWithRetry(() => import('./components/CalendarModule').then(m => ({ default: m.CalendarModule })));
+const DebtorsNotificationModal = lazyWithRetry(() => import('./components/DebtorsNotificationModal').then(m => ({ default: m.DebtorsNotificationModal })));
 
 // --- SKELETON LOADER MODERNO ---
 function ModuleSkeleton() {

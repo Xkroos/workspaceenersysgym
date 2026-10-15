@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { addDays, addMonths, format } from 'date-fns';
 import { ImageUpload } from './ImageUpload';
+import { compressImage } from '../lib/imageCompressor';
 import { useExchangeRate } from '../hooks/useExchangeRate';
 
 interface Plan {
@@ -122,22 +123,30 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
         }
     }
 
-   const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
         setUploading(true);
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${Math.random()}.${fileExt}`;
-        const filePath = `${user?.id}/${fileName}`;
 
         try {
-            // OPTIMIZACIÓN: Forzamos el contentType y pasamos el archivo directamente
+            // Conversión y optimización universal (iPhone HEIC, PNG, JPG, WEBP, etc.)
+            const { dataUrl, blob } = await compressImage(file, {
+                maxWidth: 800,
+                maxHeight: 800,
+                quality: 0.8,
+                mimeType: 'image/jpeg'
+            });
+
+            const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}.jpg`;
+            const filePath = `${user?.id}/${fileName}`;
+            const uploadPayload = blob || file;
+
             const { error: uploadError } = await supabase.storage
                 .from('avatars')
-                .upload(filePath, file, {
+                .upload(filePath, uploadPayload, {
                     cacheControl: '3600',
                     upsert: false,
-                    contentType: file.type // <-- Esto le dice a Supabase exactamente qué está recibiendo
+                    contentType: 'image/jpeg'
                 });
                 
             if (uploadError) throw uploadError;
@@ -146,13 +155,16 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
                 .from('avatars')
                 .getPublicUrl(filePath);
 
-            setPreviewUrl(publicUrl);
+            setPreviewUrl(dataUrl || publicUrl);
             setFormData(prev => ({ ...prev, photo_url: publicUrl }));
         } catch (error: any) {
-            // Alerta mejorada para que veas el error real si persiste
+            console.error("Error al subir imagen:", error);
             alert('Error subiendo imagen: ' + (error.error_description || error.message || error));
         } finally {
             setUploading(false);
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+            }
         }
     };
     
@@ -256,7 +268,7 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
                             {uploading && <div className="absolute inset-0 bg-black/70 flex items-center justify-center"><Loader2 className="w-6 h-6 text-orange-500 animate-spin" /></div>}
                         </div>
                         <button type="button" onClick={() => fileInputRef.current?.click()} className="absolute -bottom-2 -right-2 bg-orange-600 text-white p-2 rounded-lg shadow-lg hover:bg-orange-700 transition-transform active:scale-90 border-b-2 border-orange-800"><Camera className="w-4 h-4" /></button>
-                        <input type="file" ref={fileInputRef} onChange={handlePhotoChange} className="hidden" accept="image/*" />
+                        <input type="file" ref={fileInputRef} onChange={handlePhotoChange} className="hidden" accept="image/*,.heic,.heif" />
                     </div>
 
                     {/* DATOS BÁSICOS */}

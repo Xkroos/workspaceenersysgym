@@ -20,7 +20,7 @@ export function ImageUpload({ onImageSelected, disabled = false }: ImageUploadPr
 
     setErrorMessage(null);
 
-    const maxSizeMB = 10;
+    const maxSizeMB = 15;
     if (file.size > maxSizeMB * 1024 * 1024) {
       setErrorMessage(`La imagen supera el límite de ${maxSizeMB}MB`);
       return;
@@ -116,7 +116,7 @@ export function ImageUpload({ onImageSelected, disabled = false }: ImageUploadPr
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/jpg,image/*"
+        accept="image/*,.heic,.heif"
         onChange={handleFileSelect}
         className="hidden"
         disabled={disabled || compressing}

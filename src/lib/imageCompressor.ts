@@ -1,5 +1,6 @@
 /**
  * Utilidad de compresión y optimización de imágenes en el cliente (navegador).
+ * Soporta cualquier tipo de foto: JPG, JPEG, PNG, WEBP, GIF, SVG, BMP y HEIC (iPhone).
  * Diseñada para máxima compatibilidad, estabilidad y velocidad.
  */
 
@@ -12,8 +13,25 @@ export interface CompressionOptions {
 
 export interface CompressionResult {
   dataUrl: string;
+  blob?: Blob;
   originalSize: number;
   compressedSize: number;
+}
+
+export function dataUrlToBlob(dataUrl: string): Blob {
+  try {
+    const parts = dataUrl.split(',');
+    const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
+    const bstr = atob(parts[1] || '');
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new Blob([u8arr], { type: mime });
+  } catch {
+    return new Blob([], { type: 'image/jpeg' });
+  }
 }
 
 export async function compressImage(
@@ -33,6 +51,27 @@ export async function compressImage(
 
   const originalSize = file.size || 0;
 
+  // Detección y conversión automática de formato HEIC/HEIF de Apple iPhone
+  let processedBlob: Blob = file;
+  const isHeic = file.type.includes('heic') || 
+                 file.type.includes('heif') || 
+                 (file instanceof File && (file.name.toLowerCase().endsWith('.heic') || file.name.toLowerCase().endsWith('.heif')));
+
+  if (isHeic) {
+    try {
+      const heic2anyModule = await import('heic2any');
+      const heic2any = heic2anyModule.default || heic2anyModule;
+      const converted = await heic2any({
+        blob: file,
+        toType: 'image/jpeg',
+        quality: 0.8
+      });
+      processedBlob = Array.isArray(converted) ? converted[0] : converted;
+    } catch (e) {
+      console.warn("Aviso: No se pudo convertir HEIC con heic2any, se continuará con lectura directa:", e);
+    }
+  }
+
   return new Promise((resolve) => {
     const reader = new FileReader();
 
@@ -50,7 +89,7 @@ export async function compressImage(
       const img = new Image();
 
       img.onerror = () => {
-        // Si no se puede decodificar en Canvas, devolver dataUrl original como respaldo seguro
+        // Si no se puede decodificar en Canvas (ej. SVG o formato raw), devolver dataUrl original como respaldo seguro
         resolve({
           dataUrl: rawDataUrl,
           originalSize,
@@ -108,12 +147,14 @@ export async function compressImage(
 
             resolve({
               dataUrl: compressedDataUrl,
+              blob: dataUrlToBlob(compressedDataUrl),
               originalSize,
               compressedSize
             });
           } else {
             resolve({
               dataUrl: rawDataUrl,
+              blob: dataUrlToBlob(rawDataUrl),
               originalSize,
               compressedSize: originalSize
             });
@@ -122,6 +163,7 @@ export async function compressImage(
           // Si ocurre cualquier error en canvas, usar rawDataUrl como fallback 100% confiable
           resolve({
             dataUrl: rawDataUrl,
+            blob: dataUrlToBlob(rawDataUrl),
             originalSize,
             compressedSize: originalSize
           });
@@ -131,6 +173,6 @@ export async function compressImage(
       img.src = rawDataUrl;
     };
 
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(processedBlob);
   });
 }
