@@ -1,10 +1,6 @@
 /**
  * Utilidad de compresión y optimización de imágenes en el cliente (navegador).
- * Diseñada para máxima compatibilidad con dispositivos móviles (iOS Safari, Android WebViews, navegadores de escritorio).
- * - Usa URL.createObjectURL para evitar sobrecarga de memoria heap (evita Out-Of-Memory en teléfonos).
- * - Protegida contra fallos de `new File()` en Safari / WebKit.
- * - Todos los callbacks asíncronos están envueltos en try/catch para evitar excepciones no capturadas.
- * - Limita dimensiones y calidad para garantizar comprobantes nítidos de ~40-80KB sin saturar el ancho de banda ni la base de datos.
+ * Diseñada para máxima compatibilidad, estabilidad y velocidad.
  */
 
 export interface CompressionOptions {
@@ -16,8 +12,6 @@ export interface CompressionOptions {
 
 export interface CompressionResult {
   dataUrl: string;
-  file?: File | Blob;
-  blob?: Blob | null;
   originalSize: number;
   compressedSize: number;
 }
@@ -33,78 +27,35 @@ export async function compressImage(
     mimeType = 'image/jpeg'
   } = options;
 
-  if (!file || !(file instanceof Blob)) {
-    throw new Error('Archivo de imagen no válido');
+  if (!file) {
+    throw new Error('Archivo de imagen no proporcionado');
   }
 
-  const originalSize = file.size;
+  const originalSize = file.size || 0;
 
-  // Verificación de formato HEIC no soportado nativamente por canvas
-  const fileName = (file instanceof File ? file.name : '').toLowerCase();
-  const fileType = (file.type || '').toLowerCase();
-  const isHeic = fileType.includes('heic') || fileType.includes('heif') || fileName.endsWith('.heic') || fileName.endsWith('.heif');
+  return new Promise((resolve) => {
+    const reader = new FileReader();
 
-  return new Promise((resolve, reject) => {
-    let objectUrl: string | null = null;
-    let settled = false;
+    reader.onerror = () => {
+      resolve({ dataUrl: '', originalSize, compressedSize: 0 });
+    };
 
-    // Timeout de seguridad: si el navegador se cuelga procesando, no deja la app congelada
-    const timeoutId = setTimeout(() => {
-      cleanup();
-      if (!settled) {
-        settled = true;
-        reject(new Error('Tiempo de espera agotado al procesar la imagen'));
+    reader.onload = (e) => {
+      const rawDataUrl = e.target?.result as string;
+      if (!rawDataUrl) {
+        resolve({ dataUrl: '', originalSize, compressedSize: 0 });
+        return;
       }
-    }, 15000);
 
-    const cleanup = () => {
-      clearTimeout(timeoutId);
-      if (objectUrl) {
-        try {
-          URL.revokeObjectURL(objectUrl);
-        } catch {
-          // Ignorar fallo al revocar
-        }
-        objectUrl = null;
-      }
-    };
-
-    const safeResolve = (res: CompressionResult) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(res);
-    };
-
-    const safeReject = (err: any) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(err instanceof Error ? err : new Error(String(err)));
-    };
-
-    try {
-      objectUrl = URL.createObjectURL(file);
-    } catch {
-      // Si URL.createObjectURL falla, intentamos FileReader como fallback secundario
-      const reader = new FileReader();
-      reader.onerror = () => safeReject(new Error('Error al leer el archivo'));
-      reader.onload = (e) => {
-        processImageSrc(e.target?.result as string);
-      };
-      reader.readAsDataURL(file);
-      return;
-    }
-
-    const processImageSrc = (src: string) => {
       const img = new Image();
 
       img.onerror = () => {
-        if (isHeic) {
-          safeReject(new Error('El formato HEIC de iPhone no es compatible directamente. Por favor selecciona una foto en JPG o PNG.'));
-        } else {
-          safeReject(new Error('No se pudo decodificar la imagen seleccionada'));
-        }
+        // Si no se puede decodificar en Canvas, devolver dataUrl original como respaldo seguro
+        resolve({
+          dataUrl: rawDataUrl,
+          originalSize,
+          compressedSize: originalSize
+        });
       };
 
       img.onload = () => {
@@ -113,11 +64,11 @@ export async function compressImage(
           let height = img.naturalHeight || img.height;
 
           if (!width || !height) {
-            safeReject(new Error('Dimensiones de imagen inválidas'));
+            resolve({ dataUrl: rawDataUrl, originalSize, compressedSize: originalSize });
             return;
           }
 
-          // Calcular nuevas dimensiones conservando aspect ratio
+          // Escalar manteniendo proporción
           if (width > height) {
             if (width > maxWidth) {
               height = Math.round((height * maxWidth) / width);
@@ -136,104 +87,50 @@ export async function compressImage(
 
           const ctx = canvas.getContext('2d');
           if (!ctx) {
-            safeReject(new Error('No se pudo inicializar el Canvas 2D'));
+            resolve({ dataUrl: rawDataUrl, originalSize, compressedSize: originalSize });
             return;
           }
 
-          // Suavizado de imagen de alta calidad
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'high';
-
-          // Dibujar en el canvas redimensionado
           ctx.drawImage(img, 0, 0, width, height);
 
-          // Generar DataURL
-          let targetMime = mimeType;
-          let dataUrl: string;
+          let compressedDataUrl: string;
           try {
-            dataUrl = canvas.toDataURL(targetMime, quality);
+            compressedDataUrl = canvas.toDataURL(mimeType, quality);
           } catch {
-            targetMime = 'image/jpeg';
-            dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+            compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
           }
 
-          // Estimar tamaño comprimido en bytes a partir del Base64
-          const base64Str = dataUrl.split(',')[1] || '';
-          const estimatedSize = Math.round((base64Str.length * 3) / 4);
+          if (compressedDataUrl && compressedDataUrl.length > 50) {
+            const base64Str = compressedDataUrl.split(',')[1] || '';
+            const compressedSize = Math.round((base64Str.length * 3) / 4);
 
-          // Si el navegador soporta toBlob, generamos también el archivo de forma 100% segura
-          if (typeof canvas.toBlob === 'function') {
-            try {
-              canvas.toBlob(
-                (blob) => {
-                  try {
-                    if (!blob) {
-                      safeResolve({
-                        dataUrl,
-                        blob: null,
-                        originalSize,
-                        compressedSize: estimatedSize
-                      });
-                      return;
-                    }
-
-                    const cleanName = (file instanceof File ? file.name : 'comprobante')
-                      .replace(/\.[^/.]+$/, "") + (targetMime === 'image/webp' ? '.webp' : '.jpg');
-
-                    let safeFile: File | Blob = blob;
-                    try {
-                      // Safari / WebKit puede fallar con new File() -> captura segura
-                      safeFile = new File([blob], cleanName, {
-                        type: targetMime,
-                        lastModified: Date.now(),
-                      });
-                    } catch {
-                      safeFile = blob;
-                    }
-
-                    safeResolve({
-                      dataUrl,
-                      blob,
-                      file: safeFile,
-                      originalSize,
-                      compressedSize: blob.size || estimatedSize
-                    });
-                  } catch (blobInnerErr) {
-                    safeResolve({
-                      dataUrl,
-                      blob: null,
-                      originalSize,
-                      compressedSize: estimatedSize
-                    });
-                  }
-                },
-                targetMime,
-                quality
-              );
-            } catch {
-              safeResolve({
-                dataUrl,
-                blob: null,
-                originalSize,
-                compressedSize: estimatedSize
-              });
-            }
-          } else {
-            safeResolve({
-              dataUrl,
-              blob: null,
+            resolve({
+              dataUrl: compressedDataUrl,
               originalSize,
-              compressedSize: estimatedSize
+              compressedSize
+            });
+          } else {
+            resolve({
+              dataUrl: rawDataUrl,
+              originalSize,
+              compressedSize: originalSize
             });
           }
-        } catch (drawErr) {
-          safeReject(drawErr);
+        } catch {
+          // Si ocurre cualquier error en canvas, usar rawDataUrl como fallback 100% confiable
+          resolve({
+            dataUrl: rawDataUrl,
+            originalSize,
+            compressedSize: originalSize
+          });
         }
       };
 
-      img.src = src;
+      img.src = rawDataUrl;
     };
 
-    processImageSrc(objectUrl);
+    reader.readAsDataURL(file);
   });
 }

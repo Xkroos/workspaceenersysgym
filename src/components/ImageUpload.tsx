@@ -16,44 +16,39 @@ export function ImageUpload({ onImageSelected, disabled = false }: ImageUploadPr
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    
-    // Limpiar input inmediatamente para permitir re-selección del mismo archivo
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-
     if (!file) return;
 
     setErrorMessage(null);
 
     const maxSizeMB = 10;
     if (file.size > maxSizeMB * 1024 * 1024) {
-      setErrorMessage(`La imagen supera el límite de ${maxSizeMB}MB (${(file.size / (1024 * 1024)).toFixed(1)}MB)`);
+      setErrorMessage(`La imagen supera el límite de ${maxSizeMB}MB`);
       return;
     }
 
     try {
       setCompressing(true);
-      // Compresión inteligente en cliente: max 1000px, quality 0.75
       const { dataUrl, originalSize, compressedSize } = await compressImage(file, {
-        maxWidth: 1000,
-        maxHeight: 1000,
+        maxWidth: 900,
+        maxHeight: 900,
         quality: 0.75,
         mimeType: 'image/jpeg'
       });
 
-      const savings = Math.round(((originalSize - compressedSize) / originalSize) * 100);
+      if (!dataUrl) {
+        setErrorMessage("No se pudo leer la imagen seleccionada. Intenta con otra foto.");
+        return;
+      }
+
+      const savings = originalSize > compressedSize 
+        ? Math.round(((originalSize - compressedSize) / originalSize) * 100) 
+        : 0;
       setSavingsInfo(savings > 0 ? `Optimizado -${savings}%` : 'Listo');
       setPreview(dataUrl);
       onImageSelected(dataUrl);
     } catch (err: any) {
       console.error("Error al procesar la imagen:", err);
-      const isHeic = file.name.toLowerCase().endsWith('.heic') || file.type.includes('heic');
-      const msg = isHeic 
-        ? "Formato HEIC no compatible. Por favor sube la foto en formato JPG o PNG."
-        : (err?.message || "No se pudo procesar la imagen. Intenta con otra foto.");
-      
-      setErrorMessage(msg);
+      setErrorMessage("No se pudo procesar la imagen. Intenta con otra foto.");
       setPreview(null);
       setSavingsInfo(null);
       onImageSelected('');
@@ -79,6 +74,9 @@ export function ImageUpload({ onImageSelected, disabled = false }: ImageUploadPr
           type="button"
           onClick={() => {
             setErrorMessage(null);
+            if (fileInputRef.current) {
+              fileInputRef.current.value = '';
+            }
             fileInputRef.current?.click();
           }}
           disabled={disabled || compressing}
@@ -109,7 +107,7 @@ export function ImageUpload({ onImageSelected, disabled = false }: ImageUploadPr
       </div>
 
       {errorMessage && (
-        <div className="p-2.5 bg-red-950/40 border border-red-800/60 rounded-xl text-red-400 text-[11px] font-bold flex items-center gap-2 animate-in fade-in">
+        <div className="p-2.5 bg-red-950/40 border border-red-800/60 rounded-xl text-red-400 text-[11px] font-bold flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
           <span>{errorMessage}</span>
         </div>
@@ -128,14 +126,8 @@ export function ImageUpload({ onImageSelected, disabled = false }: ImageUploadPr
         <div className="relative w-full h-40 bg-black rounded-2xl border border-zinc-800 overflow-hidden shadow-inner group">
           <img
             src={preview}
-            alt="Preview comprobante"
+            alt="Comprobante"
             className="w-full h-full object-contain"
-            loading="lazy"
-            onError={() => {
-              setPreview(null);
-              setErrorMessage("Error al visualizar la imagen. Intenta con otra foto.");
-              onImageSelected('');
-            }}
           />
           {savingsInfo && (
             <div className="absolute bottom-2 right-2 px-2.5 py-1 bg-emerald-950/80 backdrop-blur-sm border border-emerald-800/60 rounded-lg text-[9px] font-black text-emerald-400 uppercase tracking-widest flex items-center gap-1 shadow-lg">

@@ -8,7 +8,6 @@ import {
 } from 'lucide-react';
 import { addDays, addMonths, format } from 'date-fns';
 import { ImageUpload } from './ImageUpload';
-import { ErrorBoundary } from './ErrorBoundary';
 import { useExchangeRate } from '../hooks/useExchangeRate';
 
 interface Plan {
@@ -372,13 +371,7 @@ export default function MembershipForm({ onClose, onSuccess, initialData }: Memb
                                     <div className="space-y-1.5 flex flex-col justify-between pt-2 border-t border-zinc-800">
                                         <label className="text-[10px] font-black text-zinc-500 uppercase tracking-wider ml-1">Comprobante de Pago (Opcional)</label>
                                         <div className="bg-black rounded-2xl border-2 border-dashed border-zinc-800 p-2">
-                                            <ErrorBoundary fallback={
-                                                <div className="text-center p-3 text-xs text-zinc-500 font-bold">
-                                                    No se pudo cargar el selector de imagen.
-                                                </div>
-                                            }>
-                                                <ImageUpload onImageSelected={setPaymentImageUrl} disabled={loading} />
-                                            </ErrorBoundary>
+                                            <ImageUpload onImageSelected={setPaymentImageUrl} disabled={loading} />
                                         </div>
                                     </div>
                                 </div>

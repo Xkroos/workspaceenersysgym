@@ -3,7 +3,6 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { X, CheckCircle2, DollarSign, CreditCard, Hash, Loader2, RefreshCw, Edit2, Check } from 'lucide-react'; 
 import { ImageUpload } from './ImageUpload'; 
-import { ErrorBoundary } from './ErrorBoundary';
 import { useExchangeRate } from '../hooks/useExchangeRate'; 
 
 interface PaymentModalProps {
@@ -34,7 +33,6 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
 
     // --- CENTRALIZACIÓN BCV CON CACHÉ Y EDICIÓN MANUAL ---
     const { rate: bcvRate, loading: loadingRate, refresh: fetchBCVRate, updateRate } = useExchangeRate();
-    const [amountInBs, setAmountInBs] = useState<number>(0);
     const [isEditingRate, setIsEditingRate] = useState(false);
     const [customRateInput, setCustomRateInput] = useState('');
 
@@ -42,17 +40,14 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
         loadData();
     }, [id]);
 
-    // Calcular bolívares automáticamente con redondeo exacto a 2 decimales comerciales
-    useEffect(() => {
-        const floatAmount = parseSafeAmount(amount);
+    // Cálculo síncrono e instantáneo de bolívares en cada render
+    const floatAmount = useMemo(() => parseSafeAmount(amount), [amount]);
+    const amountInBs = useMemo(() => {
         if (floatAmount > 0 && bcvRate > 0) {
-            // Redondeo estricto a 2 decimales para evitar 3 decimales o residuos flotantes
-            const totalBs = Math.round(floatAmount * bcvRate * 100) / 100;
-            setAmountInBs(totalBs);
-        } else {
-            setAmountInBs(0);
+            return Math.round(floatAmount * bcvRate * 100) / 100;
         }
-    }, [amount, bcvRate]);
+        return 0;
+    }, [floatAmount, bcvRate]);
 
     const handleSaveCustomRate = () => {
         const parsed = parseSafeAmount(customRateInput);
@@ -134,10 +129,18 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
                                 <div className="space-y-4">
                                     {/* VISUALIZADORES DE SALDO */}
                                     <div className="flex gap-2">
-                                        <div className="flex-1 p-3 bg-red-950/20 rounded-2xl border border-red-900/30">
-                                            <p className="text-[8px] font-black text-red-400 uppercase tracking-widest">Pendiente</p>
+                                        <button
+                                            type="button"
+                                            onClick={() => setAmount(remaining > 0 ? remaining.toString() : '')}
+                                            title="Clic para autocompletar el monto pendiente"
+                                            className="flex-1 p-3 bg-red-950/20 hover:bg-red-950/40 rounded-2xl border border-red-900/30 text-left transition-all active:scale-[0.98] group"
+                                        >
+                                            <p className="text-[8px] font-black text-red-400 uppercase tracking-widest flex items-center justify-between">
+                                                <span>Pendiente</span>
+                                                <span className="text-[7px] text-zinc-500 lowercase opacity-0 group-hover:opacity-100 transition-opacity">autollenar</span>
+                                            </p>
                                             <p className="text-lg font-black text-red-500">${remaining.toFixed(2)}</p>
-                                        </div>
+                                        </button>
                                         <div className="flex-1 p-3 bg-black rounded-2xl border border-zinc-800">
                                             <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Total</p>
                                             <p className="text-lg font-black text-zinc-200">${orderTotal.toFixed(2)}</p>
@@ -262,13 +265,7 @@ export function PaymentModal({ id, orderTotal, customerName, onClose, onSuccess 
                                 <div className="space-y-2">
                                     <label className="text-xs font-black text-zinc-300 uppercase tracking-widest ml-1">Comprobante de Pago</label>
                                     <div className="bg-black rounded-2xl border-2 border-dashed border-zinc-800 p-2 min-h-[160px] flex items-center justify-center">
-                                        <ErrorBoundary fallback={
-                                            <div className="text-center p-4 text-xs text-zinc-500 font-bold">
-                                                No se pudo cargar el selector de imagen. Puedes continuar con el registro.
-                                            </div>
-                                        }>
-                                            <ImageUpload onImageSelected={setImageData} disabled={loading} />
-                                        </ErrorBoundary>
+                                        <ImageUpload onImageSelected={setImageData} disabled={loading} />
                                     </div>
                                 </div>
                             </div>
